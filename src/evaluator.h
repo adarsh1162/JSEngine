@@ -50,8 +50,13 @@ struct TimerTask {
 };
 
 class Evaluator {
-public:
+private:
     std::shared_ptr<Environment> environment;
+    int callStackDepth = 0;
+    std::shared_ptr<JSObject> objectPrototype;
+    std::shared_ptr<JSValue> lastThisContext;
+
+public:
     std::vector<TimerTask> timerQueue;
     std::unordered_set<int> cancelledTimers;
     int nextTimerId = 1;

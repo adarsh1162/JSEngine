@@ -60,11 +60,29 @@ Evaluator::Evaluator() {
 }
 
 void Evaluator::setupGlobalEnvironment() {
+    objectPrototype = std::make_shared<JSObject>();
+    objectPrototype->properties["hasOwnProperty"] = std::make_shared<JSNativeFunction>("hasOwnProperty", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(false));
+        if (this->lastThisContext && this->lastThisContext->getType() == JSValueType::OBJECT) {
+            auto obj = std::dynamic_pointer_cast<JSObject>(this->lastThisContext);
+            return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(obj->properties.count(args[0]->toString()) > 0));
+        }
+        return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(false));
+    });
+    objectPrototype->properties["toString"] = std::make_shared<JSNativeFunction>("toString", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (this->lastThisContext && this->lastThisContext->getType() == JSValueType::OBJECT) {
+            return std::shared_ptr<JSValue>(std::make_shared<JSString>("[object Object]"));
+        }
+        return std::shared_ptr<JSValue>(std::make_shared<JSString>("undefined"));
+    });
+
     auto consoleObj = std::make_shared<JSObject>();
+    consoleObj->prototype = objectPrototype;
     consoleObj->properties["log"] = std::make_shared<JSNativeFunction>("log", builtin_console_log);
     environment->define("console", consoleObj);
 
     auto mathObj = std::make_shared<JSObject>();
+    mathObj->prototype = objectPrototype;
     mathObj->properties["floor"] = std::make_shared<JSNativeFunction>("floor", builtin_math_floor);
     mathObj->properties["random"] = std::make_shared<JSNativeFunction>("random", [](const std::vector<std::shared_ptr<JSValue>>& args) {
         return std::make_shared<JSNumber>((double)rand() / RAND_MAX);
@@ -548,12 +566,13 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
         auto prototype = std::make_shared<JSObject>();
         if (classDecl->superClass) {
             auto superVal = evaluate(classDecl->superClass);
-            if (superVal->getType() == JSValueType::FUNCTION) {
-                auto superFunc = std::dynamic_pointer_cast<JSFunction>(superVal);
-                prototype->prototype = std::dynamic_pointer_cast<JSObject>(superFunc->prototypeProperty); // Set __proto__
-            } else {
-                throw RuntimeError("TypeError: Super expression must be null or a function");
+            if (superVal->getType() != JSValueType::FUNCTION) throw RuntimeError("TypeError: Superclass must be a function");
+            auto superFunc = std::dynamic_pointer_cast<JSFunction>(superVal);
+            if (superFunc->prototypeProperty) {
+                prototype->prototype = std::dynamic_pointer_cast<JSObject>(superFunc->prototypeProperty);
             }
+        } else {
+            prototype->prototype = objectPrototype;
         }
         
         for (auto method : classDecl->methods) {
@@ -649,6 +668,7 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
     }
     if (auto objLit = std::dynamic_pointer_cast<ObjectLiteral>(expr)) {
         auto obj = std::make_shared<JSObject>();
+        obj->prototype = objectPrototype;
         for (const auto& prop : objLit->properties) {
             obj->properties[prop.key] = evaluate(prop.value);
         }
@@ -951,6 +971,20 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
         }
     }
     if (auto call = std::dynamic_pointer_cast<CallExpression>(expr)) {
+        class CallStackGuard {
+            int& depth;
+        public:
+            CallStackGuard(int& d) : depth(d) {
+                depth++;
+                if (depth > 200) {
+                    depth--;
+                    throw RuntimeError("RangeError: Maximum call stack size exceeded");
+                }
+            }
+            ~CallStackGuard() { depth--; }
+        };
+        CallStackGuard guard(callStackDepth);
+
         auto callee = evaluate(call->callee);
         
         if (std::dynamic_pointer_cast<SuperExpression>(call->callee)) {
@@ -1001,6 +1035,14 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
                 } else {
                     funcEnv->define("this", std::make_shared<JSUndefined>());
                 }
+
+                auto argsObj = std::make_shared<JSObject>();
+                argsObj->prototype = objectPrototype;
+                argsObj->properties["length"] = std::make_shared<JSNumber>(args.size());
+                for (size_t i = 0; i < args.size(); ++i) {
+                    argsObj->properties[std::to_string(i)] = args[i];
+                }
+                funcEnv->define("arguments", argsObj);
             }
 
             size_t paramCount = func->declaration->parameters.size();
@@ -1036,6 +1078,7 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
     }
     if (auto member = std::dynamic_pointer_cast<MemberExpression>(expr)) {
         auto obj = evaluate(member->object);
+        lastThisContext = obj;
         
         std::string propName;
         if (!member->computed) {
