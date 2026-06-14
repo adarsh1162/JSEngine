@@ -7,15 +7,20 @@
 // Define all possible token types in JavaScript
 enum class TokenType {
     // Keywords
-    LET, CONST, FUNCTION, IF, ELSE, FOR, WHILE, DO, SWITCH, RETURN, TYPEOF, NEW,
+    LET, CONST, VAR, FUNCTION, IF, ELSE, FOR, WHILE, DO, SWITCH, RETURN, TYPEOF, NEW,
+    TRY, CATCH, FINALLY, THROW, THIS, BREAK, CONTINUE, CASE, DEFAULT_KW, IN_KW, OF_KW,
+    CLASS, EXTENDS, SUPER, ASYNC, AWAIT,
 
     // Data Types / Literals
     NUMBER, STRING, BOOLEAN_TRUE, BOOLEAN_FALSE, NULL_LIT, UNDEFINED,
+    TEMPLATE_LITERAL, REGEX_LITERAL,
     IDENTIFIER,
 
     // Operators
     PLUS, MINUS, MULTIPLY, DIVIDE, MODULO, ASSIGN,
     PLUS_ASSIGN, MINUS_ASSIGN, MULTIPLY_ASSIGN, DIVIDE_ASSIGN,
+    INCREMENT, DECREMENT, QUESTION,
+    BITWISE_AND, BITWISE_OR, BITWISE_XOR, BITWISE_NOT, LEFT_SHIFT, RIGHT_SHIFT, UNSIGNED_RIGHT_SHIFT,
     EQUAL, STRICT_EQUAL, NOT_EQUAL, STRICT_NOT_EQUAL,
     GREATER, GREATER_EQUAL, LESS, LESS_EQUAL,
     LOGICAL_AND, LOGICAL_OR, LOGICAL_NOT,
@@ -63,9 +68,11 @@ private:
     Token nextToken();
     Token readNumber();
     Token readString(char quoteType);
+    Token readTemplateLiteral();
     Token readIdentifierOrKeyword();
 
 public:
+    TokenType lastTokenType = TokenType::ILLEGAL;
     explicit Lexer(const std::string& sourceCode);
     std::vector<Token> tokenize();
 };

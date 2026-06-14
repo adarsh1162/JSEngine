@@ -13,10 +13,15 @@ public:
     explicit RuntimeError(const std::string& message) : std::runtime_error(message) {}
 };
 
+struct Variable {
+    std::shared_ptr<JSValue> value;
+    bool isConst;
+};
+
 class Environment {
 private:
-    // Store variables: name -> JSValue
-    std::unordered_map<std::string, std::shared_ptr<JSValue>> values;
+    // Store variables: name -> Variable struct
+    std::unordered_map<std::string, Variable> values;
     
     // Parent scope
     std::shared_ptr<Environment> enclosing;
@@ -26,16 +31,26 @@ public:
     Environment();
     
     // Local (block/function) environment
-    explicit Environment(std::shared_ptr<Environment> enclosingEnv);
+    explicit Environment(std::shared_ptr<Environment> enclosingEnv, bool isFuncScope = false);
+
+    bool isFunctionScope;
 
     // Create a new variable (`let` or `const`)
-    void define(const std::string& name, std::shared_ptr<JSValue> value);
+    void define(const std::string& name, std::shared_ptr<JSValue> value, bool isConst = false);
+
+    // Create a var variable (function scoped)
+    void defineVar(const std::string& name, std::shared_ptr<JSValue> value);
     
     // Get a variable's value. If not in current, checks enclosing.
     std::shared_ptr<JSValue> get(const std::string& name);
     
     // Update an existing variable
     void assign(const std::string& name, std::shared_ptr<JSValue> value);
+
+    // Get all local variables (for loop closure copying)
+    const std::unordered_map<std::string, Variable>& getLocalValues() const {
+        return values;
+    }
 };
 
 #endif // ENVIRONMENT_H

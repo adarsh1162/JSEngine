@@ -125,6 +125,65 @@ std::shared_ptr<JSValue> getArrayMethod(std::shared_ptr<JSArray> array, const st
             return std::shared_ptr<JSValue>(array);
         });
     }
+    if (methodName == "shift") {
+        return std::make_shared<JSNativeFunction>("shift", [array](const std::vector<std::shared_ptr<JSValue>>& args) {
+            if (array->elements.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+            auto val = array->elements.front();
+            array->elements.erase(array->elements.begin());
+            return val;
+        });
+    }
+    if (methodName == "unshift") {
+        return std::make_shared<JSNativeFunction>("unshift", [array](const std::vector<std::shared_ptr<JSValue>>& args) {
+            array->elements.insert(array->elements.begin(), args.begin(), args.end());
+            return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(array->elements.size()));
+        });
+    }
+    if (methodName == "slice") {
+        return std::make_shared<JSNativeFunction>("slice", [array](const std::vector<std::shared_ptr<JSValue>>& args) {
+            int start = 0;
+            int end = array->elements.size();
+            if (args.size() > 0) {
+                start = args[0]->toNumber();
+                if (start < 0) start = std::max(0, (int)array->elements.size() + start);
+            }
+            if (args.size() > 1) {
+                end = args[1]->toNumber();
+                if (end < 0) end = std::max(0, (int)array->elements.size() + end);
+            }
+            start = std::min((int)array->elements.size(), start);
+            end = std::min((int)array->elements.size(), end);
+            
+            auto resArr = std::make_shared<JSArray>();
+            if (start < end) {
+                resArr->elements.assign(array->elements.begin() + start, array->elements.begin() + end);
+            }
+            return std::shared_ptr<JSValue>(resArr);
+        });
+    }
+    if (methodName == "splice") {
+        return std::make_shared<JSNativeFunction>("splice", [array](const std::vector<std::shared_ptr<JSValue>>& args) {
+            if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSArray>());
+            int start = args[0]->toNumber();
+            if (start < 0) start = std::max(0, (int)array->elements.size() + start);
+            start = std::min((int)array->elements.size(), start);
+
+            int deleteCount = array->elements.size() - start;
+            if (args.size() > 1) {
+                deleteCount = std::max(0, (int)args[1]->toNumber());
+                deleteCount = std::min((int)array->elements.size() - start, deleteCount);
+            }
+
+            auto resArr = std::make_shared<JSArray>();
+            resArr->elements.assign(array->elements.begin() + start, array->elements.begin() + start + deleteCount);
+
+            array->elements.erase(array->elements.begin() + start, array->elements.begin() + start + deleteCount);
+            if (args.size() > 2) {
+                array->elements.insert(array->elements.begin() + start, args.begin() + 2, args.end());
+            }
+            return std::shared_ptr<JSValue>(resArr);
+        });
+    }
     return std::make_shared<JSUndefined>();
 }
 
@@ -151,6 +210,53 @@ std::shared_ptr<JSValue> getStringMethod(std::shared_ptr<JSString> str, const st
                 arr->elements.push_back(std::make_shared<JSString>(str->value.substr(start)));
             }
             return std::shared_ptr<JSValue>(arr);
+        });
+    }
+    if (methodName == "substring") {
+        return std::make_shared<JSNativeFunction>("substring", [str](const std::vector<std::shared_ptr<JSValue>>& args) {
+            int start = 0;
+            int end = str->value.length();
+            if (args.size() > 0) start = std::max(0, (int)args[0]->toNumber());
+            if (args.size() > 1) end = std::max(0, (int)args[1]->toNumber());
+            start = std::min((int)str->value.length(), start);
+            end = std::min((int)str->value.length(), end);
+            if (start > end) std::swap(start, end);
+            return std::shared_ptr<JSValue>(std::make_shared<JSString>(str->value.substr(start, end - start)));
+        });
+    }
+    if (methodName == "toLowerCase") {
+        return std::make_shared<JSNativeFunction>("toLowerCase", [str](const std::vector<std::shared_ptr<JSValue>>& args) {
+            std::string res = str->value;
+            std::transform(res.begin(), res.end(), res.begin(), ::tolower);
+            return std::shared_ptr<JSValue>(std::make_shared<JSString>(res));
+        });
+    }
+    if (methodName == "toUpperCase") {
+        return std::make_shared<JSNativeFunction>("toUpperCase", [str](const std::vector<std::shared_ptr<JSValue>>& args) {
+            std::string res = str->value;
+            std::transform(res.begin(), res.end(), res.begin(), ::toupper);
+            return std::shared_ptr<JSValue>(std::make_shared<JSString>(res));
+        });
+    }
+    if (methodName == "trim") {
+        return std::make_shared<JSNativeFunction>("trim", [str](const std::vector<std::shared_ptr<JSValue>>& args) {
+            std::string res = str->value;
+            res.erase(res.begin(), std::find_if(res.begin(), res.end(), [](unsigned char ch) { return !std::isspace(ch); }));
+            res.erase(std::find_if(res.rbegin(), res.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(), res.end());
+            return std::shared_ptr<JSValue>(std::make_shared<JSString>(res));
+        });
+    }
+    if (methodName == "replace") {
+        return std::make_shared<JSNativeFunction>("replace", [str](const std::vector<std::shared_ptr<JSValue>>& args) {
+            if (args.size() < 2) return std::shared_ptr<JSValue>(str);
+            std::string search = args[0]->toString();
+            std::string replace = args[1]->toString();
+            std::string res = str->value;
+            size_t pos = res.find(search);
+            if (pos != std::string::npos) {
+                res.replace(pos, search.length(), replace);
+            }
+            return std::shared_ptr<JSValue>(std::make_shared<JSString>(res));
         });
     }
     return std::make_shared<JSUndefined>();

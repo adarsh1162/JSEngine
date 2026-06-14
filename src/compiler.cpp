@@ -216,22 +216,28 @@ void Compiler::compileExpression(std::shared_ptr<Expression> expr) {
     }
     else if (auto assign = std::dynamic_pointer_cast<AssignmentExpression>(expr)) {
         compileExpression(assign->value);
-        int arg = resolveLocal(assign->name);
-        if (arg != -1) {
-            emitBytes(static_cast<uint8_t>(OpCode::OP_SET_LOCAL), (uint8_t)arg);
-        } else {
-            ObjString* nameStr = allocateString(assign->name);
-            int constant = compilingChunk->addConstant(OBJ_VAL(nameStr)); 
-            emitBytes(static_cast<uint8_t>(OpCode::OP_SET_GLOBAL), constant);
+        if (auto id = std::dynamic_pointer_cast<Identifier>(assign->left)) {
+            int arg = resolveLocal(id->name);
+            if (arg != -1) {
+                emitBytes(static_cast<uint8_t>(OpCode::OP_SET_LOCAL), (uint8_t)arg);
+            } else {
+                ObjString* nameStr = allocateString(id->name);
+                int constant = compilingChunk->addConstant(OBJ_VAL(nameStr)); 
+                emitBytes(static_cast<uint8_t>(OpCode::OP_SET_GLOBAL), constant);
+            }
         }
     }
     else if (auto call = std::dynamic_pointer_cast<CallExpression>(expr)) {
         if (auto mem = std::dynamic_pointer_cast<MemberExpression>(call->callee)) {
             if (auto objId = std::dynamic_pointer_cast<Identifier>(mem->object)) {
-                if (objId->name == "console" && mem->property == "log") {
-                    compileExpression(call->arguments[0]);
-                    emitByte(static_cast<uint8_t>(OpCode::OP_PRINT));
-                    return;
+                if (objId->name == "console" && !mem->computed) {
+                    if (auto propStr = std::dynamic_pointer_cast<StringLiteral>(mem->property)) {
+                        if (propStr->value == "log") {
+                            compileExpression(call->arguments[0]);
+                            emitByte(static_cast<uint8_t>(OpCode::OP_PRINT));
+                            return;
+                        }
+                    }
                 }
             }
         }

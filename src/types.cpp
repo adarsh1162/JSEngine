@@ -25,7 +25,9 @@ double JSString::toNumber() const {
 #include "environment.h"
 
 JSFunction::JSFunction(std::shared_ptr<FunctionDeclaration> decl, std::shared_ptr<Environment> env) 
-    : declaration(decl), closure(env) {}
+    : declaration(decl), closure(env) {
+        prototypeProperty = std::make_shared<JSObject>();
+    }
 
 std::string JSFunction::toString() const {
     if (declaration && !declaration->name.empty()) {

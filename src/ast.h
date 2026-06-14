@@ -38,10 +38,28 @@ public:
     explicit BooleanLiteral(bool v) : value(v) {}
 };
 
+class TemplateLiteralExpression : public Expression {
+public:
+    std::vector<std::shared_ptr<Expression>> parts; // either StringLiteral or some evaluated expression
+    explicit TemplateLiteralExpression(const std::vector<std::shared_ptr<Expression>>& p) : parts(p) {}
+};
+
+class RegexLiteralExpression : public Expression {
+public:
+    std::string pattern;
+    std::string flags;
+    RegexLiteralExpression(const std::string& p, const std::string& f) : pattern(p), flags(f) {}
+};
+
 class Identifier : public Expression {
 public:
     std::string name;
     explicit Identifier(const std::string& n) : name(n) {}
+};
+
+class SuperExpression : public Expression {
+public:
+    SuperExpression() {}
 };
 
 class BinaryExpression : public Expression {
@@ -56,12 +74,12 @@ public:
 
 class AssignmentExpression : public Expression {
 public:
-    std::string name;
+    std::shared_ptr<Expression> left;
     TokenType op;
     std::shared_ptr<Expression> value;
 
-    AssignmentExpression(const std::string& n, std::shared_ptr<Expression> v, TokenType o = TokenType::ASSIGN)
-        : name(n), op(o), value(v) {}
+    AssignmentExpression(std::shared_ptr<Expression> l, std::shared_ptr<Expression> v, TokenType o = TokenType::ASSIGN)
+        : left(l), op(o), value(v) {}
 };
 
 class CallExpression : public Expression {
@@ -93,10 +111,33 @@ public:
 class MemberExpression : public Expression {
 public:
     std::shared_ptr<Expression> object;
-    std::string property;
+    std::shared_ptr<Expression> property;
+    bool computed;
 
-    MemberExpression(std::shared_ptr<Expression> obj, const std::string& prop)
-        : object(obj), property(prop) {}
+    MemberExpression(std::shared_ptr<Expression> obj, std::shared_ptr<Expression> prop, bool comp = false)
+        : object(obj), property(prop), computed(comp) {}
+};
+
+class UpdateExpression : public Expression {
+public:
+    TokenType op;
+    std::shared_ptr<Expression> argument;
+    bool isPrefix;
+
+    UpdateExpression(TokenType o, std::shared_ptr<Expression> arg, bool pre)
+        : op(o), argument(arg), isPrefix(pre) {}
+};
+
+class ThisExpression : public Expression {};
+
+class ConditionalExpression : public Expression {
+public:
+    std::shared_ptr<Expression> test;
+    std::shared_ptr<Expression> consequent;
+    std::shared_ptr<Expression> alternate;
+
+    ConditionalExpression(std::shared_ptr<Expression> t, std::shared_ptr<Expression> c, std::shared_ptr<Expression> a)
+        : test(t), consequent(c), alternate(a) {}
 };
 
 class ArrayLiteral : public Expression {
@@ -109,23 +150,25 @@ class BlockStatement;
 
 class FunctionExpression : public Expression {
 public:
-    std::string name; // Can be empty for anonymous functions
-    std::vector<std::string> parameters;
+    std::string name; // Can be empty for anonymous
+    std::vector<std::pair<std::string, std::shared_ptr<Expression>>> parameters;
     std::shared_ptr<BlockStatement> body;
     bool hasRest;
 
-    FunctionExpression(const std::string& n, const std::vector<std::string>& params, std::shared_ptr<BlockStatement> b, bool hr = false)
-        : name(n), parameters(params), body(b), hasRest(hr) {}
+    FunctionExpression(const std::string& n, const std::vector<std::pair<std::string, std::shared_ptr<Expression>>>& params,
+                       std::shared_ptr<BlockStatement> b, bool rest = false)
+        : name(n), parameters(params), body(b), hasRest(rest) {}
 };
 
 class ArrowFunctionExpression : public Expression {
 public:
-    std::vector<std::string> parameters;
+    std::vector<std::pair<std::string, std::shared_ptr<Expression>>> parameters;
     std::shared_ptr<BlockStatement> body;
     bool hasRest;
 
-    ArrowFunctionExpression(const std::vector<std::string>& params, std::shared_ptr<BlockStatement> b, bool hr = false)
-        : parameters(params), body(b), hasRest(hr) {}
+    ArrowFunctionExpression(const std::vector<std::pair<std::string, std::shared_ptr<Expression>>>& params,
+                            std::shared_ptr<BlockStatement> b, bool rest = false)
+        : parameters(params), body(b), hasRest(rest) {}
 };
 
 class SpreadElement : public Expression {
@@ -156,17 +199,53 @@ public:
 class VariableDeclaration : public Statement {
 public:
     bool isConst;
+    bool isVar;
     std::string name;
     std::shared_ptr<Expression> initializer;
 
-    VariableDeclaration(bool c, const std::string& n, std::shared_ptr<Expression> init)
-        : isConst(c), name(n), initializer(init) {}
+    VariableDeclaration(bool c, bool v, const std::string& n, std::shared_ptr<Expression> init)
+        : isConst(c), isVar(v), name(n), initializer(init) {}
+};
+
+class DestructuringDeclaration : public Statement {
+public:
+    bool isConst;
+    bool isVar;
+    std::vector<std::string> names;
+    std::shared_ptr<Expression> initializer;
+    bool isArray;
+
+    DestructuringDeclaration(bool c, bool v, const std::vector<std::string>& n, std::shared_ptr<Expression> init, bool isArr = false)
+        : isConst(c), isVar(v), names(n), initializer(init), isArray(isArr) {}
 };
 
 class BlockStatement : public Statement {
 public:
     std::vector<std::shared_ptr<Statement>> statements;
     explicit BlockStatement(const std::vector<std::shared_ptr<Statement>>& stmts) : statements(stmts) {}
+};
+
+class MethodDefinition : public ASTNode {
+public:
+    std::string name;
+    std::vector<std::pair<std::string, std::shared_ptr<Expression>>> parameters;
+    bool hasRest;
+    std::shared_ptr<BlockStatement> body;
+    bool isAsync;
+
+    MethodDefinition(const std::string& n, const std::vector<std::pair<std::string, std::shared_ptr<Expression>>>& params,
+                     bool rest, std::shared_ptr<BlockStatement> b, bool async = false)
+        : name(n), parameters(params), hasRest(rest), body(b), isAsync(async) {}
+};
+
+class ClassDeclaration : public Statement {
+public:
+    std::string name;
+    std::shared_ptr<Expression> superClass; // Can be null
+    std::vector<std::shared_ptr<MethodDefinition>> methods;
+
+    ClassDeclaration(const std::string& n, std::shared_ptr<Expression> superC, const std::vector<std::shared_ptr<MethodDefinition>>& m)
+        : name(n), superClass(superC), methods(m) {}
 };
 
 class IfStatement : public Statement {
@@ -188,33 +267,108 @@ public:
         : condition(cond), body(b) {}
 };
 
+class DoWhileStatement : public Statement {
+public:
+    std::shared_ptr<Statement> body;
+    std::shared_ptr<Expression> condition;
+
+    DoWhileStatement(std::shared_ptr<Statement> b, std::shared_ptr<Expression> cond)
+        : body(b), condition(cond) {}
+};
+
 class ForStatement : public Statement {
 public:
-    std::shared_ptr<Statement> init; // usually VariableDeclaration or ExpressionStatement
+    std::shared_ptr<Statement> init; // Can be VariableDeclaration or ExpressionStatement
     std::shared_ptr<Expression> condition;
     std::shared_ptr<Expression> update;
     std::shared_ptr<Statement> body;
 
-    ForStatement(std::shared_ptr<Statement> i, std::shared_ptr<Expression> c, std::shared_ptr<Expression> u, std::shared_ptr<Statement> b)
-        : init(i), condition(c), update(u), body(b) {}
+    ForStatement(std::shared_ptr<Statement> i, std::shared_ptr<Expression> cond,
+                 std::shared_ptr<Expression> upd, std::shared_ptr<Statement> b)
+        : init(i), condition(cond), update(upd), body(b) {}
+};
+
+class ForInStatement : public Statement {
+public:
+    std::shared_ptr<Statement> left; // VariableDeclaration or Identifier (ExpressionStatement)
+    std::shared_ptr<Expression> right;
+    std::shared_ptr<Statement> body;
+
+    ForInStatement(std::shared_ptr<Statement> l, std::shared_ptr<Expression> r, std::shared_ptr<Statement> b)
+        : left(l), right(r), body(b) {}
+};
+
+class ForOfStatement : public Statement {
+public:
+    std::shared_ptr<Statement> left; // VariableDeclaration or Identifier (ExpressionStatement)
+    std::shared_ptr<Expression> right;
+    std::shared_ptr<Statement> body;
+
+    ForOfStatement(std::shared_ptr<Statement> l, std::shared_ptr<Expression> r, std::shared_ptr<Statement> b)
+        : left(l), right(r), body(b) {}
+};
+
+class SwitchCase {
+public:
+    std::shared_ptr<Expression> test; // nullptr means 'default'
+    std::vector<std::shared_ptr<Statement>> consequent;
+    SwitchCase(std::shared_ptr<Expression> t, const std::vector<std::shared_ptr<Statement>>& cons)
+        : test(t), consequent(cons) {}
+};
+
+class SwitchStatement : public Statement {
+public:
+    std::shared_ptr<Expression> discriminant;
+    std::vector<SwitchCase> cases;
+
+    SwitchStatement(std::shared_ptr<Expression> disc, const std::vector<SwitchCase>& cs)
+        : discriminant(disc), cases(cs) {}
 };
 
 class FunctionDeclaration : public Statement {
 public:
     std::string name;
-    std::vector<std::string> parameters;
+    std::vector<std::pair<std::string, std::shared_ptr<Expression>>> parameters;
     std::shared_ptr<BlockStatement> body;
     bool hasRest;
 
-    FunctionDeclaration(const std::string& n, const std::vector<std::string>& params, std::shared_ptr<BlockStatement> b, bool hr = false)
-        : name(n), parameters(params), body(b), hasRest(hr) {}
+    FunctionDeclaration(const std::string& n, const std::vector<std::pair<std::string, std::shared_ptr<Expression>>>& params,
+                        std::shared_ptr<BlockStatement> b, bool rest = false)
+        : name(n), parameters(params), body(b), hasRest(rest) {}
 };
 
 class ReturnStatement : public Statement {
 public:
-    std::shared_ptr<Expression> argument; // Can be null
-
+    std::shared_ptr<Expression> argument;
     explicit ReturnStatement(std::shared_ptr<Expression> arg = nullptr) : argument(arg) {}
+};
+
+class BreakStatement : public Statement {
+public:
+    BreakStatement() {}
+};
+
+class ContinueStatement : public Statement {
+public:
+    ContinueStatement() {}
+};
+
+class ThrowStatement : public Statement {
+public:
+    std::shared_ptr<Expression> argument;
+
+    explicit ThrowStatement(std::shared_ptr<Expression> arg) : argument(arg) {}
+};
+
+class TryStatement : public Statement {
+public:
+    std::shared_ptr<BlockStatement> block;
+    std::shared_ptr<BlockStatement> handler;
+    std::string param;
+    std::shared_ptr<BlockStatement> finalizer; // Can be null
+
+    TryStatement(std::shared_ptr<BlockStatement> b, std::shared_ptr<BlockStatement> h, const std::string& p, std::shared_ptr<BlockStatement> f = nullptr)
+        : block(b), handler(h), param(p), finalizer(f) {}
 };
 
 // Root of the AST

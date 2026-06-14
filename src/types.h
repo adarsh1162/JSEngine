@@ -72,6 +72,7 @@ class JSFunction : public JSValue {
 public:
     std::shared_ptr<FunctionDeclaration> declaration;
     std::shared_ptr<Environment> closure;
+    std::shared_ptr<JSValue> prototypeProperty;
 
     JSFunction(std::shared_ptr<FunctionDeclaration> decl, std::shared_ptr<Environment> env);
 
@@ -84,8 +85,24 @@ public:
 class JSObject : public JSValue {
 public:
     std::unordered_map<std::string, std::shared_ptr<JSValue>> properties;
+    std::shared_ptr<JSObject> prototype;
     JSValueType getType() const override { return JSValueType::OBJECT; }
-    std::string toString() const override { return "[object Object]"; }
+    std::string toString() const override {
+        std::string res = "{ ";
+        bool first = true;
+        for (const auto& kv : properties) {
+            if (!first) res += ", ";
+            res += kv.first + ": ";
+            if (kv.second->getType() == JSValueType::STRING) {
+                res += "'" + kv.second->toString() + "'";
+            } else {
+                res += kv.second->toString();
+            }
+            first = false;
+        }
+        res += " }";
+        return res;
+    }
     double toNumber() const override { return std::numeric_limits<double>::quiet_NaN(); }
     bool isTruthy() const override { return true; }
 };
@@ -99,12 +116,14 @@ public:
 
     JSValueType getType() const override { return JSValueType::ARRAY; }
     std::string toString() const override {
-        std::string res;
+        std::string result = "";
         for (size_t i = 0; i < elements.size(); ++i) {
-            res += elements[i]->toString();
-            if (i < elements.size() - 1) res += ",";
+            if (elements[i]->getType() != JSValueType::UNDEFINED && elements[i]->getType() != JSValueType::NULL_TYPE) {
+                result += elements[i]->toString();
+            }
+            if (i < elements.size() - 1) result += ",";
         }
-        return res;
+        return result;
     }
 };
 

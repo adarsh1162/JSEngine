@@ -30,8 +30,12 @@ private:
     std::shared_ptr<Expression> assignment();
     std::shared_ptr<Expression> logicalOr();
     std::shared_ptr<Expression> logicalAnd();
+    std::shared_ptr<Expression> bitwiseOr();
+    std::shared_ptr<Expression> bitwiseXor();
+    std::shared_ptr<Expression> bitwiseAnd();
     std::shared_ptr<Expression> equality();
     std::shared_ptr<Expression> comparison();
+    std::shared_ptr<Expression> shift();
     std::shared_ptr<Expression> term();
     std::shared_ptr<Expression> factor();
     std::shared_ptr<Expression> power();
@@ -43,12 +47,18 @@ private:
 
     // Grammar - Statements
     std::shared_ptr<Statement> declaration();
+    std::shared_ptr<Statement> statement();
+    std::shared_ptr<Statement> classDeclaration();
+    std::shared_ptr<MethodDefinition> methodDefinition();
     std::shared_ptr<Statement> varDeclaration();
     std::shared_ptr<Statement> functionDeclaration();
-    std::shared_ptr<Statement> statement();
     std::shared_ptr<Statement> ifStatement();
     std::shared_ptr<Statement> whileStatement();
+    std::shared_ptr<Statement> doWhileStatement();
     std::shared_ptr<Statement> forStatement();
+    std::shared_ptr<Statement> switchStatement();
+    std::shared_ptr<Statement> tryStatement();
+    std::shared_ptr<Statement> throwStatement();
     std::shared_ptr<Statement> returnStatement();
     std::shared_ptr<BlockStatement> block();
     std::shared_ptr<Statement> expressionStatement();

@@ -1,2 +1,0 @@
-maine likh bhi diya hai aur tum projectdeatils.md aur testcases.md mein padh bhi sakte ho ab batao isme ui banana theek hoga ya direct code hi karna sahi rahega 
-dekho code quality , readability aur project structure sab industry evel ka hona chahiye , unnecessarry ai comments mat daana , humanized comments rakhna sirf wahi jahan neededd ho 
