@@ -163,7 +163,24 @@ void Evaluator::setupGlobalEnvironment() {
     jsonObj->properties["stringify"].value = std::make_shared<JSNativeFunction>("stringify", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
         if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
         
+        
+        std::unordered_set<void*> visited;
         std::function<std::string(std::shared_ptr<JSValue>)> stringify = [&](std::shared_ptr<JSValue> val) -> std::string {
+            if (val && (val->getType() == JSValueType::OBJECT || val->getType() == JSValueType::ARRAY)) {
+                if (visited.count(val.get())) {
+                    throw JSException(std::make_shared<JSString>("TypeError: Converting circular structure to JSON"));
+                }
+                visited.insert(val.get());
+            }
+            
+            struct VisitedGuard {
+                std::unordered_set<void*>& v;
+                void* ptr;
+                bool isObj;
+                VisitedGuard(std::unordered_set<void*>& v, void* ptr, bool isObj) : v(v), ptr(ptr), isObj(isObj) {}
+                ~VisitedGuard() { if (isObj) v.erase(ptr); }
+            } guard(visited, val.get(), val && (val->getType() == JSValueType::OBJECT || val->getType() == JSValueType::ARRAY));
+
             if (!val) return "null";
             if (val->getType() == JSValueType::NULL_TYPE) return "null";
             if (val->getType() == JSValueType::UNDEFINED) return "undefined";
@@ -219,6 +236,80 @@ void Evaluator::setupGlobalEnvironment() {
 
     // Inject Polyfills for Map, Set, Array.prototype.indexOf, etc.
     std::string polyfillCode = R"(
+
+        class EventEmitter {
+            constructor() { this.events = {}; }
+            on(event, cb) { 
+                if(!this.events[event]) this.events[event] = [];
+                this.events[event].push(cb);
+            }
+            emit() {
+                let event = arguments[0];
+                let arg1 = arguments[1];
+                let arg2 = arguments[2];
+                let arg3 = arguments[3];
+                if(this.events[event]) {
+                    let evts = this.events[event];
+                    for(let i=0; i<evts.length; i++) {
+                        let cb = evts[i];
+                        queueMicrotask(function() { cb(arg1, arg2, arg3); });
+                    }
+                }
+            }
+        }
+        
+        
+        let String = function(val) {
+            if (val === undefined) return "";
+            return val + "";
+        };
+        
+        String.prototype.includes = function(search) { return this.indexOf(search) !== -1; };
+
+        String.prototype.startsWith = function(search) { return this.indexOf(search) === 0; };
+        String.prototype.endsWith = function(search) { 
+            let idx = this.indexOf(search);
+            return idx !== -1 && idx === this.length - search.length;
+        };
+        String.prototype.concat = function() {
+            let str = String(this);
+            for(let i=0; i<arguments.length; i++) str += arguments[i];
+            return str;
+        };
+        
+        function repeatString(str, count) {
+            let res = "";
+            for(let i=0; i<count; i++) res += str;
+            return res;
+        }
+
+        String.prototype.padStart = function(targetLength, padString) {
+            targetLength = targetLength >> 0;
+            padString = String(padString !== undefined ? padString : ' ');
+            let strThis = String(this);
+            if (strThis.length > targetLength) return strThis;
+            else {
+                targetLength = targetLength - strThis.length;
+                if (targetLength > padString.length) {
+                    padString += repeatString(padString, targetLength / padString.length);
+                }
+                return padString.substring(0, targetLength) + strThis;
+            }
+        };
+        String.prototype.padEnd = function(targetLength, padString) {
+            targetLength = targetLength >> 0;
+            padString = String(padString !== undefined ? padString : ' ');
+            let strThis = String(this);
+            if (strThis.length > targetLength) return strThis;
+            else {
+                targetLength = targetLength - strThis.length;
+                if (targetLength > padString.length) {
+                    padString += repeatString(padString, targetLength / padString.length);
+                }
+                return strThis + padString.substring(0, targetLength);
+            }
+        };
+
         class Map {
             constructor() { this._keys = []; this._values = []; }
             set(k, v) { 
@@ -476,6 +567,9 @@ void Evaluator::runMicrotasks() {
 void Evaluator::runEventLoop() {
     runMicrotasks();
     while (!timerQueue.empty() || !microtaskQueue.empty()) {
+        eventLoopTick++;
+        if (eventLoopTick % 1000 == 0) { markAndSweep(); }
+
         runMicrotasks();
         if (timerQueue.empty()) break;
         
@@ -542,7 +636,13 @@ void Evaluator::interpret(std::shared_ptr<Program> program) {
         runEventLoop();
         markAndSweep();
     } catch (const JSException& e) {
-        std::cerr << "Uncaught Error: " << e.value->toString() << std::endl;
+        
+            std::string stackTrace = "Uncaught Error: " + e.value->toString();
+            for (auto it = executionStack.rbegin(); it != executionStack.rend(); ++it) {
+                stackTrace += "\n    at " + *it + "()";
+            }
+            std::cerr << stackTrace << std::endl;
+
     } catch (const RuntimeError& e) {
         std::cerr << "Runtime Error: " << e.what() << std::endl;
     } catch (const ReturnException& e) {
@@ -966,7 +1066,27 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
 
 
 std::shared_ptr<JSValue> Evaluator::executeFunction(std::shared_ptr<JSValue> callee, std::shared_ptr<JSValue> thisContext, const std::vector<std::shared_ptr<JSValue>>& args) {
+    
+    std::string funcName = "anonymous";
     if (callee->getType() == JSValueType::NATIVE_FUNCTION) {
+        funcName = std::dynamic_pointer_cast<JSNativeFunction>(callee)->name;
+    } else if (callee->getType() == JSValueType::FUNCTION) {
+        auto fn = std::dynamic_pointer_cast<JSFunction>(callee);
+        if (!fn->declaration->name.empty()) funcName = fn->declaration->name;
+    }
+    
+    class ExecutionStackGuard {
+        std::vector<std::string>& stack;
+    public:
+        ExecutionStackGuard(std::vector<std::string>& s, const std::string& name) : stack(s) {
+            stack.push_back(name);
+        }
+        ~ExecutionStackGuard() {
+            if (!stack.empty()) stack.pop_back();
+        }
+    };
+    ExecutionStackGuard execGuard(executionStack, funcName);
+if (callee->getType() == JSValueType::NATIVE_FUNCTION) {
         auto nativeFunc = std::dynamic_pointer_cast<JSNativeFunction>(callee);
         auto previousThis = lastThisContext;
         lastThisContext = thisContext;
@@ -1542,17 +1662,27 @@ std::shared_ptr<JSValue> Evaluator::evalMemberExpression(MemberExpression* membe
             });
             if (method->getType() != JSValueType::UNDEFINED) return method;
             
-            try {
-                int idx = std::stoi(propName);
-                if (idx >= 0 && idx < arr->elements.size()) return arr->elements[idx];
-            } catch (...) {}
-            return std::make_shared<JSUndefined>();
-        }
-        else if (obj->getType() == JSValueType::STRING) {
+        } else if (obj->getType() == JSValueType::STRING) {
             auto str = std::dynamic_pointer_cast<JSString>(obj);
             if (propName == "length") return std::make_shared<JSNumber>(str->value.length());
             auto method = getStringMethod(str, propName);
             if (method->getType() != JSValueType::UNDEFINED) return method;
+            
+            try {
+                auto stringObj = this->environment->get("String");
+                if (stringObj->getType() == JSValueType::FUNCTION || stringObj->getType() == JSValueType::OBJECT) {
+                    auto proto = stringObj->getType() == JSValueType::FUNCTION ? 
+                        std::dynamic_pointer_cast<JSFunction>(stringObj)->prototypeProperty : 
+                        std::dynamic_pointer_cast<JSObject>(stringObj)->properties["prototype"].value;
+                    if (proto && proto->getType() == JSValueType::OBJECT) {
+                        auto methodJS = std::dynamic_pointer_cast<JSObject>(proto)->properties[propName].value;
+                        if (methodJS && (methodJS->getType() == JSValueType::FUNCTION || methodJS->getType() == JSValueType::NATIVE_FUNCTION)) {
+                            return methodJS;
+                        }
+                    }
+                }
+            } catch(...) {}
+            
             try {
                 int idx = std::stoi(propName);
                 if (idx >= 0 && idx < str->value.length()) return std::make_shared<JSString>(std::string(1, str->value[idx]));

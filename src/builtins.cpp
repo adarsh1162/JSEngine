@@ -206,6 +206,20 @@ std::shared_ptr<JSValue> getArrayMethod(std::shared_ptr<JSArray> array, const st
 }
 
 std::shared_ptr<JSValue> getStringMethod(std::shared_ptr<JSString> str, const std::string& methodName) {
+    if (methodName == "indexOf") {
+        return std::make_shared<JSNativeFunction>("indexOf", [str](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+            if (args.empty()) return std::make_shared<JSNumber>(-1);
+            std::string search = args[0]->toString();
+            int start = 0;
+            if (args.size() > 1 && args[1]->getType() == JSValueType::NUMBER) {
+                start = std::max(0, (int)args[1]->toNumber());
+            }
+            size_t pos = str->value.find(search, start);
+            if (pos == std::string::npos) return std::make_shared<JSNumber>(-1);
+            return std::make_shared<JSNumber>((double)pos);
+        });
+    }
+
     if (methodName == "split") {
         return std::make_shared<JSNativeFunction>("split", [str](const std::vector<std::shared_ptr<JSValue>>& args) {
             std::string sep = "";

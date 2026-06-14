@@ -97,6 +97,8 @@ public:
 private:
     std::shared_ptr<Environment> environment;
     int callStackDepth = 0;
+    std::vector<std::string> executionStack;
+    int eventLoopTick = 0;
     std::shared_ptr<JSObject> objectPrototype;
     std::shared_ptr<JSValue> lastThisContext;
 
