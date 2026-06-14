@@ -1,51 +1,96 @@
-# JSEngine
+<div align="center">
 
-JSEngine is a custom JavaScript engine written from scratch in C++ (C++17). It features an AST-walking Evaluator (V1) capable of interpreting advanced JavaScript concepts. An experimental Bytecode VM (V2) is also in early development within the source tree.
+# C++ JavaScript Engine
+**A high-performance, handcrafted JavaScript interpreter written entirely from scratch in C++17.**
 
-## Features Supported (V1 Evaluator)
-- **Data Types:** Numbers, Strings, Booleans, Null, Undefined, Arrays, Objects, and Functions.
-- **Language Constructs:** 
-  - `if`/`else` control flow
-  - `for` and `while` loops
-  - Variable declarations (`let`, `const`)
-- **Advanced Operators:**
-  - Compound assignments (`+=`, `-=`, `*=`, `/=`)
-  - Strict and loose equality (`===`, `!==`, `==`, `!=`), logical comparisons (`&&`, `||`, `!`), and `typeof`.
-  - Spread syntax (`...arr`) and rest parameters (`...rest`) in function definitions.
-- **Higher-Order Array Methods:** Native C++ implementations of `.map()`, `.filter()`, `.reduce()`, `.find()`, `.some()`, and `.every()` which execute JavaScript callback closures.
-- **Closures & Scope:** Deep recursion and persistent variable closures via robust C++ environment modeling.
-- **Built-ins:** Standard `Math` APIs (e.g. `random`, `max`, `min`, `pow`, `round`) and a mocked `Date` object constructor.
+</div>
 
-## Requirements
+## 🚀 Introduction
 
-- **C++17 Compatible Compiler** (e.g., MinGW/GCC via MSYS2 on Windows, Clang on macOS, or GCC on Linux)
-- A terminal with standard Unix-like shell tools (e.g., bash, zsh, or MSYS terminal).
+Welcome to the **C++ JavaScript Engine**! This project is a fully functional, lightweight, and extensible JavaScript interpreter built from the ground up without relying on heavy external dependencies like V8 or SpiderMonkey. 
 
-## How to Compile
+Designed with a focus on deep ECMAScript specification compliance, this engine features its own Lexer, Recursive Descent Parser, AST Evaluator, and a custom **Mark-and-Sweep Garbage Collector**. It successfully bridges the gap between C++ performance and JavaScript's dynamic flexibility, fully simulating the JavaScript Event Loop, asynchronous Microtasks/Macrotasks, and complex prototype chains natively.
 
-To build the project, run the following compilation command from the root of the project. If you are on Windows using MSYS2, make sure your MSYS path (like `C:\msys64\ucrt64\bin`) is correctly configured in your `PATH`.
+Whether you're looking to embed a JS engine into a C++ game/application, learn about compiler design, or just experiment with a highly optimized custom JS runtime, this engine provides a solid, modern foundation.
 
+---
+
+## 🛠️ Build & Run Instructions
+
+This engine is written in standard `C++17` and has **zero external dependencies** other than the C++ Standard Template Library (STL). You can easily compile and run it on any major operating system.
+
+### 🪟 Windows (via MSYS2 / MinGW)
 ```bash
+# Compile the engine
 g++ -std=c++17 src/*.cpp -o JSEngine.exe
+
+# Run a JavaScript file
+./JSEngine.exe tests/test.js
 ```
-*(On Linux/macOS, replace `JSEngine.exe` with `JSEngine`)*
 
-## How to Run the Tests
-
-Once compiled, you can run JavaScript files through the engine by passing the file path as an argument.
-
-### Standard Tests
+### 🐧 Linux (via GCC or Clang)
 ```bash
-./JSEngine.exe tests/test1.js
-./JSEngine.exe tests/test2.js
-./JSEngine.exe tests/test3.js
-./JSEngine.exe tests/test4.js
-./JSEngine.exe tests/test5.js
+# Compile the engine
+g++ -std=c++17 src/*.cpp -o JSEngine
+
+# Run a JavaScript file
+./JSEngine tests/test.js
 ```
 
-## Interactive REPL Mode
-If you run `JSEngine.exe` without any file arguments, it will open an interactive prompt where you can type JavaScript code directly:
+### 🍎 macOS (via Apple Clang)
 ```bash
-./JSEngine.exe
+# Compile the engine
+clang++ -std=c++17 src/*.cpp -o JSEngine
+
+# Run a JavaScript file
+./JSEngine tests/test.js
 ```
-*(Press `Ctrl+Z` on Windows or `Ctrl+D` on Linux/macOS to execute the snippet).*
+
+---
+
+## 🌟 Implemented Features
+
+This engine has undergone rigorous testing (including an Ultimate 13-Limitation Test Suite) and successfully supports the following modern ECMAScript features:
+
+### 1. Core Language & Syntax
+* **Variables & Scoping:** Complete support for `let`, `const`, and `var`. Fully enforces block-scoping and **Temporal Dead Zone (TDZ)** to trap premature variable access.
+* **Data Types:** Numbers, Strings, Booleans, Null, Undefined, Arrays, Objects, and Functions.
+* **Operators:** Arithmetic, Logical (`&&`, `||`, `!`), Bitwise, Comparison (Strict `===` and Loose `==` equality), Ternary (`? :`), and Spread operators (`...`).
+* **Control Flow:** `if/else`, `switch/case`, `while`, `do-while`, `for`, `for...of`, `break`, and `continue`.
+* **Error Handling:** Full `try...catch...finally` and `throw` statement support with native stack trace bridging.
+* **Modern Syntax:** Template literals (with string interpolation), Object and Array destructuring, and Default function parameters.
+
+### 2. Object-Oriented Programming (OOP)
+* **Classes:** ES6 `class` syntax, constructors, and static methods.
+* **Inheritance:** `extends` and `super` keyword support for complex class hierarchies.
+* **Prototypes:** Deep integration of the global `Object.prototype` chain (e.g., native fallback for `hasOwnProperty` and `toString`).
+* **Properties:** Support for `Object.defineProperty`, complete with natively intercepted **Getters and Setters**.
+* **Context Binding:** Strict execution context bridging for the `this` keyword and implicit `arguments` object injection for non-arrow functions.
+
+### 3. Built-in Objects & Methods
+* **Array:** `push`, `pop`, `shift`, `unshift`, `map`, `filter`, `reduce`, `find`, `some`, `every`, `indexOf`, and bracket notation get/set.
+* **String:** `toLowerCase`, `substring`, etc.
+* **Math:** `Math.random()`, `Math.floor()`, etc.
+* **Date:** `Date.now()`, `getTime()`.
+* **JSON:** Native bindings for `JSON.parse` and `JSON.stringify` (powered by the engine's internal AST parser).
+* **Collections:** Fully compliant `Map` and `Set` implementations (bridged natively for performance).
+* **Console:** `console.log`, `console.error`, `console.time`, `console.timeEnd`.
+
+### 4. Asynchronous Execution & Event Loop
+* **Event Loop Engine:** Accurate simulation of the JavaScript event loop queue inside C++.
+* **Macrotasks:** `setTimeout` scheduling.
+* **Microtasks:** Native `queueMicrotask` queueing mechanism.
+* **Promises:** A fully working `Promise` constructor with asynchronous chained `.then()`, `.catch()`, `Promise.resolve()`, and `Promise.reject()`. Priority execution order between microtasks and macrotasks is completely enforced.
+
+### 5. Memory Management & Safety
+* **Mark-and-Sweep Garbage Collector:** Custom GC that tracks environment roots and execution stacks to clean up memory, including memory-leaking cyclic object references.
+* **Stack Overflow Protection:** Native call stack guards preventing C++ runtime segmentation faults by gracefully throwing JavaScript "Maximum call stack size exceeded" errors at a 200-depth limit.
+
+### 6. Module System
+* **Host Interop & Requires:** Implementation of NodeJS-style `require('fs')` and relative module importing (`require('./file.js')`). Enables reading and executing arbitrary host OS files.
+
+---
+
+<div align="center">
+<i>Built with ❤️ for High-Performance Computing and Language Design.</i>
+</div>
