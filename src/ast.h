@@ -7,20 +7,30 @@
 #include "lexer.h"
 
 // Base node for all AST nodes
+class Evaluator;
+class JSValue;
+
 class ASTNode {
 public:
     virtual ~ASTNode() = default;
 };
 
 // Base class for expressions
-class Expression : public ASTNode {};
+class Expression : public ASTNode {
+public:
+    virtual std::shared_ptr<JSValue> eval(Evaluator* evaluator) = 0;};
 
 // Base class for statements
-class Statement : public ASTNode {};
+class Statement : public ASTNode {
+public:
+    virtual void execute(Evaluator* evaluator) = 0;};
 
 // --- Expressions ---
 
 class NumberLiteral : public Expression {
+public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
 public:
     double value;
     explicit NumberLiteral(double v) : value(v) {}
@@ -28,11 +38,17 @@ public:
 
 class StringLiteral : public Expression {
 public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
+public:
     std::string value;
     explicit StringLiteral(const std::string& v) : value(v) {}
 };
 
 class BooleanLiteral : public Expression {
+public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
 public:
     bool value;
     explicit BooleanLiteral(bool v) : value(v) {}
@@ -40,11 +56,17 @@ public:
 
 class TemplateLiteralExpression : public Expression {
 public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
+public:
     std::vector<std::shared_ptr<Expression>> parts; // either StringLiteral or some evaluated expression
     explicit TemplateLiteralExpression(const std::vector<std::shared_ptr<Expression>>& p) : parts(p) {}
 };
 
 class RegexLiteralExpression : public Expression {
+public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
 public:
     std::string pattern;
     std::string flags;
@@ -53,16 +75,25 @@ public:
 
 class Identifier : public Expression {
 public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
+public:
     std::string name;
     explicit Identifier(const std::string& n) : name(n) {}
 };
 
 class SuperExpression : public Expression {
 public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
+public:
     SuperExpression() {}
 };
 
 class BinaryExpression : public Expression {
+public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
 public:
     std::shared_ptr<Expression> left;
     TokenType op;
@@ -74,6 +105,9 @@ public:
 
 class AssignmentExpression : public Expression {
 public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
+public:
     std::shared_ptr<Expression> left;
     TokenType op;
     std::shared_ptr<Expression> value;
@@ -84,6 +118,9 @@ public:
 
 class CallExpression : public Expression {
 public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
+public:
     std::shared_ptr<Expression> callee;
     std::vector<std::shared_ptr<Expression>> arguments;
 
@@ -92,6 +129,9 @@ public:
 };
 
 class NewExpression : public Expression {
+public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
 public:
     std::shared_ptr<Expression> callee;
     std::vector<std::shared_ptr<Expression>> arguments;
@@ -102,6 +142,9 @@ public:
 
 class UnaryExpression : public Expression {
 public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
+public:
     TokenType op;
     std::shared_ptr<Expression> argument;
 
@@ -109,6 +152,9 @@ public:
 };
 
 class MemberExpression : public Expression {
+public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
 public:
     std::shared_ptr<Expression> object;
     std::shared_ptr<Expression> property;
@@ -120,6 +166,9 @@ public:
 
 class UpdateExpression : public Expression {
 public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
+public:
     TokenType op;
     std::shared_ptr<Expression> argument;
     bool isPrefix;
@@ -128,9 +177,15 @@ public:
         : op(o), argument(arg), isPrefix(pre) {}
 };
 
-class ThisExpression : public Expression {};
+class ThisExpression : public Expression {
+public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+};
 
 class ConditionalExpression : public Expression {
+public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
 public:
     std::shared_ptr<Expression> test;
     std::shared_ptr<Expression> consequent;
@@ -142,13 +197,19 @@ public:
 
 class ArrayLiteral : public Expression {
 public:
-    std::vector<std::shared_ptr<Expression>> elements;
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
+public:
+std::vector<std::shared_ptr<Expression>> elements;
     explicit ArrayLiteral(const std::vector<std::shared_ptr<Expression>>& elems) : elements(elems) {}
 };
 
 class BlockStatement;
 
 class FunctionExpression : public Expression {
+public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
 public:
     std::string name; // Can be empty for anonymous
     std::vector<std::pair<std::string, std::shared_ptr<Expression>>> parameters;
@@ -162,6 +223,9 @@ public:
 
 class ArrowFunctionExpression : public Expression {
 public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
+public:
     std::vector<std::pair<std::string, std::shared_ptr<Expression>>> parameters;
     std::shared_ptr<BlockStatement> body;
     bool hasRest;
@@ -172,6 +236,9 @@ public:
 };
 
 class SpreadElement : public Expression {
+public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
 public:
     std::shared_ptr<Expression> argument;
     explicit SpreadElement(std::shared_ptr<Expression> arg) : argument(arg) {}
@@ -184,6 +251,9 @@ struct Property {
 
 class ObjectLiteral : public Expression {
 public:
+    std::shared_ptr<JSValue> eval(Evaluator* evaluator) override;
+
+public:
     std::vector<Property> properties;
     explicit ObjectLiteral(const std::vector<Property>& props) : properties(props) {}
 };
@@ -192,11 +262,17 @@ public:
 
 class ExpressionStatement : public Statement {
 public:
+    void execute(Evaluator* evaluator) override;
+
+public:
     std::shared_ptr<Expression> expression;
     explicit ExpressionStatement(std::shared_ptr<Expression> expr) : expression(expr) {}
 };
 
 class VariableDeclaration : public Statement {
+public:
+    void execute(Evaluator* evaluator) override;
+
 public:
     bool isConst;
     bool isVar;
@@ -209,6 +285,9 @@ public:
 
 class DestructuringDeclaration : public Statement {
 public:
+    void execute(Evaluator* evaluator) override;
+
+public:
     bool isConst;
     bool isVar;
     std::vector<std::string> names;
@@ -220,6 +299,9 @@ public:
 };
 
 class BlockStatement : public Statement {
+public:
+    void execute(Evaluator* evaluator) override;
+
 public:
     std::vector<std::shared_ptr<Statement>> statements;
     explicit BlockStatement(const std::vector<std::shared_ptr<Statement>>& stmts) : statements(stmts) {}
@@ -240,6 +322,9 @@ public:
 
 class ClassDeclaration : public Statement {
 public:
+    void execute(Evaluator* evaluator) override;
+
+public:
     std::string name;
     std::shared_ptr<Expression> superClass; // Can be null
     std::vector<std::shared_ptr<MethodDefinition>> methods;
@@ -249,6 +334,9 @@ public:
 };
 
 class IfStatement : public Statement {
+public:
+    void execute(Evaluator* evaluator) override;
+
 public:
     std::shared_ptr<Expression> condition;
     std::shared_ptr<Statement> consequent;
@@ -260,6 +348,9 @@ public:
 
 class WhileStatement : public Statement {
 public:
+    void execute(Evaluator* evaluator) override;
+
+public:
     std::shared_ptr<Expression> condition;
     std::shared_ptr<Statement> body;
 
@@ -269,6 +360,9 @@ public:
 
 class DoWhileStatement : public Statement {
 public:
+    void execute(Evaluator* evaluator) override;
+
+public:
     std::shared_ptr<Statement> body;
     std::shared_ptr<Expression> condition;
 
@@ -277,6 +371,9 @@ public:
 };
 
 class ForStatement : public Statement {
+public:
+    void execute(Evaluator* evaluator) override;
+
 public:
     std::shared_ptr<Statement> init; // Can be VariableDeclaration or ExpressionStatement
     std::shared_ptr<Expression> condition;
@@ -290,6 +387,9 @@ public:
 
 class ForInStatement : public Statement {
 public:
+    void execute(Evaluator* evaluator) override;
+
+public:
     std::shared_ptr<Statement> left; // VariableDeclaration or Identifier (ExpressionStatement)
     std::shared_ptr<Expression> right;
     std::shared_ptr<Statement> body;
@@ -299,6 +399,9 @@ public:
 };
 
 class ForOfStatement : public Statement {
+public:
+    void execute(Evaluator* evaluator) override;
+
 public:
     std::shared_ptr<Statement> left; // VariableDeclaration or Identifier (ExpressionStatement)
     std::shared_ptr<Expression> right;
@@ -318,6 +421,9 @@ public:
 
 class SwitchStatement : public Statement {
 public:
+    void execute(Evaluator* evaluator) override;
+
+public:
     std::shared_ptr<Expression> discriminant;
     std::vector<SwitchCase> cases;
 
@@ -326,6 +432,9 @@ public:
 };
 
 class FunctionDeclaration : public Statement {
+public:
+    void execute(Evaluator* evaluator) override;
+
 public:
     std::string name;
     std::vector<std::pair<std::string, std::shared_ptr<Expression>>> parameters;
@@ -339,21 +448,33 @@ public:
 
 class ReturnStatement : public Statement {
 public:
+    void execute(Evaluator* evaluator) override;
+
+public:
     std::shared_ptr<Expression> argument;
     explicit ReturnStatement(std::shared_ptr<Expression> arg = nullptr) : argument(arg) {}
 };
 
 class BreakStatement : public Statement {
 public:
+    void execute(Evaluator* evaluator) override;
+
+public:
     BreakStatement() {}
 };
 
 class ContinueStatement : public Statement {
 public:
-    ContinueStatement() {}
+    void execute(Evaluator* evaluator) override;
+
+public:
+ContinueStatement() {}
 };
 
 class ThrowStatement : public Statement {
+public:
+    void execute(Evaluator* evaluator) override;
+
 public:
     std::shared_ptr<Expression> argument;
 
@@ -361,6 +482,9 @@ public:
 };
 
 class TryStatement : public Statement {
+public:
+    void execute(Evaluator* evaluator) override;
+
 public:
     std::shared_ptr<BlockStatement> block;
     std::shared_ptr<BlockStatement> handler;

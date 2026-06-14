@@ -52,6 +52,48 @@ struct TimerTask {
 };
 
 class Evaluator {
+// Visitor Pattern AST Handlers
+public:
+    void execContinueStatement(ContinueStatement* stmt);
+    void execExpressionStatement(ExpressionStatement* stmt);
+    void execThrowStatement(ThrowStatement* stmt);
+    void execReturnStatement(ReturnStatement* stmt);
+    void execBlockStatement(BlockStatement* stmt);
+    void execIfStatement(IfStatement* stmt);
+    void execDoWhileStatement(DoWhileStatement* stmt);
+    void execForOfStatement(ForOfStatement* stmt);
+    void execSwitchStatement(SwitchStatement* stmt);
+    void execDestructuringDeclaration(DestructuringDeclaration* stmt);
+    void execClassDeclaration(ClassDeclaration* stmt);
+    void execTryStatement(TryStatement* stmt);
+    void execWhileStatement(WhileStatement* stmt);
+    void execBreakStatement(BreakStatement* stmt);
+    void execFunctionDeclaration(FunctionDeclaration* stmt);
+    void execForStatement(ForStatement* stmt);
+    void execVariableDeclaration(VariableDeclaration* stmt);
+    void execForInStatement(ForInStatement* stmt);
+    std::shared_ptr<JSValue> evalArrayLiteral(ArrayLiteral* expr);
+    std::shared_ptr<JSValue> evalNumberLiteral(NumberLiteral* expr);
+    std::shared_ptr<JSValue> evalThisExpression(ThisExpression* expr);
+    std::shared_ptr<JSValue> evalUnaryExpression(UnaryExpression* expr);
+    std::shared_ptr<JSValue> evalBinaryExpression(BinaryExpression* expr);
+    std::shared_ptr<JSValue> evalTemplateLiteralExpression(TemplateLiteralExpression* expr);
+    std::shared_ptr<JSValue> evalObjectLiteral(ObjectLiteral* expr);
+    std::shared_ptr<JSValue> evalBooleanLiteral(BooleanLiteral* expr);
+    std::shared_ptr<JSValue> evalConditionalExpression(ConditionalExpression* expr);
+    std::shared_ptr<JSValue> evalRegexLiteralExpression(RegexLiteralExpression* expr);
+    std::shared_ptr<JSValue> evalNewExpression(NewExpression* expr);
+    std::shared_ptr<JSValue> evalAssignmentExpression(AssignmentExpression* expr);
+    std::shared_ptr<JSValue> evalMemberExpression(MemberExpression* expr);
+    std::shared_ptr<JSValue> evalFunctionExpression(FunctionExpression* expr);
+    std::shared_ptr<JSValue> evalIdentifier(Identifier* expr);
+    std::shared_ptr<JSValue> evalArrowFunctionExpression(ArrowFunctionExpression* expr);
+    std::shared_ptr<JSValue> evalCallExpression(CallExpression* expr);
+    std::shared_ptr<JSValue> evalUpdateExpression(UpdateExpression* expr);
+    std::shared_ptr<JSValue> evalSpreadElement(SpreadElement* expr);
+    std::shared_ptr<JSValue> evalSuperExpression(SuperExpression* expr);
+    std::shared_ptr<JSValue> evalStringLiteral(StringLiteral* expr);
+
 private:
     std::shared_ptr<Environment> environment;
     int callStackDepth = 0;

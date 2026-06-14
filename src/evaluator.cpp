@@ -81,6 +81,7 @@ void Evaluator::setupGlobalEnvironment() {
 
     auto objectConstructor = std::make_shared<JSObject>();
     objectConstructor->prototype = objectPrototype;
+    objectConstructor->properties["prototype"].value = objectPrototype;
     objectConstructor->properties["defineProperty"].value = std::make_shared<JSNativeFunction>("defineProperty", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
         if (args.size() < 3) throw RuntimeError("TypeError: Object.defineProperty requires 3 arguments");
         if (args[0]->getType() != JSValueType::OBJECT && args[0]->getType() != JSValueType::FUNCTION) throw RuntimeError("TypeError: Object.defineProperty called on non-object");
@@ -103,9 +104,13 @@ void Evaluator::setupGlobalEnvironment() {
     });
     environment->define("Object", objectConstructor);    
     // Add require
-    environment->define("require", std::make_shared<JSNativeFunction>("require", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
+    environment->define("require", std::make_shared<JSNativeFunction>("require", [this](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
         if (args.empty()) throw RuntimeError("TypeError: require expects 1 argument");
         std::string filename = args[0]->toString();
+        
+        if (filename == "fs" || filename == "path") {
+            return std::shared_ptr<JSValue>(std::make_shared<JSObject>());
+        }
         
         std::ifstream file(filename);
         if (!file.is_open()) {
@@ -195,9 +200,18 @@ void Evaluator::setupGlobalEnvironment() {
         return std::shared_ptr<JSValue>(std::make_shared<JSString>(stringify(args[0])));
     });
 
-    // Simple JSON.parse mock (For complex parsing we need to invoke the internal AST parser, but for now we throw since it's hard to eval JSON directly without a dedicated json parser).
-    jsonObj->properties["parse"].value = std::make_shared<JSNativeFunction>("parse", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
-        throw RuntimeError("Error: JSON.parse is not fully implemented in V1 engine natively");
+    jsonObj->properties["parse"].value = std::make_shared<JSNativeFunction>("parse", [this](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        if (args.empty()) throw RuntimeError("SyntaxError: Unexpected end of JSON input");
+        std::string jsonStr = "(" + args[0]->toString() + ")";
+        Lexer lexer(jsonStr);
+        auto tokens = lexer.tokenize();
+        Parser parser(tokens);
+        auto ast = parser.parse();
+        if (!ast->body.empty()) {
+            if (auto exprStmt = std::dynamic_pointer_cast<ExpressionStatement>(ast->body[0])) {
+                return this->evaluate(exprStmt->expression);
+            }
+        }
         return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
     });
 
@@ -228,7 +242,12 @@ void Evaluator::setupGlobalEnvironment() {
         Object.defineProperty(Map.prototype, "size", { get: function() { return this._keys.length; } });
         
         class Set {
-            constructor() { this._values = []; }
+            constructor(iterable) { 
+                this._values = []; 
+                if (iterable) {
+                    for (let x of iterable) this.add(x);
+                }
+            }
             add(v) { if (!this.has(v)) this._values.push(v); return this; }
             has(v) { return this._values.indexOf(v) !== -1; }
             clear() { this._values = []; }
@@ -297,7 +316,7 @@ void Evaluator::setupGlobalEnvironment() {
                 });
             }
         }
-        Promise.prototype["catch"] = function(onRejected) {
+                Promise.prototype["catch"] = function(onRejected) {
             return this.then(null, onRejected);
         };
         Promise.prototype["finally"] = function(onFinally) {
@@ -357,6 +376,26 @@ void Evaluator::setupGlobalEnvironment() {
         return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(std::round(args[0]->toNumber())));
     });
     environment->define("Math", mathObj);
+    environment->define("Array", std::make_shared<JSNativeFunction>("Array", [](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        auto arr = std::make_shared<JSArray>();
+        if (args.size() == 1 && args[0]->getType() == JSValueType::NUMBER) {
+            int len = args[0]->toNumber();
+            arr->elements.resize(len, std::make_shared<JSUndefined>());
+        } else {
+            for(auto a : args) arr->elements.push_back(a);
+        }
+        return arr;
+    }));
+
+    auto dateObj = std::make_shared<JSObject>();
+    dateObj->properties["now"].value = std::make_shared<JSNativeFunction>("now", [](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        auto now = std::chrono::system_clock::now();
+        auto duration = now.time_since_epoch();
+        auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+        return std::make_shared<JSNumber>(millis);
+    });
+    environment->define("Date", dateObj);
+
 
     auto setTimeout = std::make_shared<JSNativeFunction>("setTimeout", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
         if (args.empty() || (args[0]->getType() != JSValueType::FUNCTION && args[0]->getType() != JSValueType::NATIVE_FUNCTION)) return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
@@ -544,15 +583,15 @@ void Evaluator::registerTDZ(const std::vector<std::shared_ptr<Statement>>& state
     }
 }
 
-void Evaluator::execute(std::shared_ptr<Statement> stmt) {
-    if (auto varDecl = std::dynamic_pointer_cast<VariableDeclaration>(stmt)) {
+void Evaluator::execVariableDeclaration(VariableDeclaration* varDecl) {
         std::shared_ptr<JSValue> value = std::make_shared<JSUndefined>();
         if (varDecl->initializer) {
             value = evaluate(varDecl->initializer);
         }
         environment->define(varDecl->name, value, varDecl->isConst);
-    }
-    else if (auto destDecl = std::dynamic_pointer_cast<DestructuringDeclaration>(stmt)) {
+}
+
+void Evaluator::execDestructuringDeclaration(DestructuringDeclaration* destDecl) {
         auto value = evaluate(destDecl->initializer);
         if (destDecl->isArray) {
             if (value->getType() == JSValueType::ARRAY) {
@@ -582,15 +621,13 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
                 throw RuntimeError("TypeError: Cannot destructure property of primitive");
             }
         }
-    }
-    else if (auto throwStmt = std::dynamic_pointer_cast<ThrowStatement>(stmt)) {
-        throw JSException(evaluate(throwStmt->argument));
-    }
-    else if (auto tryStmt = std::dynamic_pointer_cast<TryStatement>(stmt)) {
-        bool thrownJS = false, thrownReturn = false, thrownBreak = false, thrownContinue = false;
-        std::shared_ptr<JSValue> returnValue = nullptr;
-        std::shared_ptr<JSValue> exceptionValue = nullptr;
+}
 
+void Evaluator::execThrowStatement(ThrowStatement* throwStmt) {
+        throw JSException(evaluate(throwStmt->argument));
+}
+
+void Evaluator::execTryStatement(TryStatement* tryStmt) {
         try {
             executeBlock(tryStmt->block->statements, std::make_shared<Environment>(environment));
         } catch (const JSException& e) {
@@ -599,53 +636,41 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
                 if (!tryStmt->param.empty()) {
                     catchEnv->define(tryStmt->param, e.value);
                 }
-                try {
-                    executeBlock(tryStmt->handler->statements, catchEnv);
-                } catch (const JSException& ce) {
-                    thrownJS = true; exceptionValue = ce.value;
-                } catch (const ReturnException& re) {
-                    thrownReturn = true; returnValue = re.value;
-                } catch (const BreakException&) {
-                    thrownBreak = true;
-                } catch (const ContinueException&) {
-                    thrownContinue = true;
-                }
-            } else {
-                thrownJS = true; exceptionValue = e.value;
+                executeBlock(tryStmt->handler->statements, catchEnv);
             }
-        } catch (const ReturnException& re) {
-            thrownReturn = true; returnValue = re.value;
-        } catch (const BreakException&) {
-            thrownBreak = true;
-        } catch (const ContinueException&) {
-            thrownContinue = true;
+        } catch (const RuntimeError& e) {
+            if (tryStmt->handler) {
+                auto catchEnv = std::make_shared<Environment>(environment);
+                if (!tryStmt->param.empty()) {
+                    catchEnv->define(tryStmt->param, std::make_shared<JSString>(e.what()));
+                }
+                executeBlock(tryStmt->handler->statements, catchEnv);
+            }
         }
-
         if (tryStmt->finalizer) {
             executeBlock(tryStmt->finalizer->statements, std::make_shared<Environment>(environment));
         }
+}
 
-        if (thrownReturn) throw ReturnException(returnValue);
-        if (thrownJS) throw JSException(exceptionValue);
-        if (thrownBreak) throw BreakException();
-        if (thrownContinue) throw ContinueException();
-    }
-    else if (auto exprStmt = std::dynamic_pointer_cast<ExpressionStatement>(stmt)) {
+void Evaluator::execExpressionStatement(ExpressionStatement* exprStmt) {
         evaluate(exprStmt->expression);
-    }
-    else if (auto ifStmt = std::dynamic_pointer_cast<IfStatement>(stmt)) {
+}
+
+void Evaluator::execIfStatement(IfStatement* ifStmt) {
         auto condition = evaluate(ifStmt->condition);
         if (condition->isTruthy()) {
             execute(ifStmt->consequent);
         } else if (ifStmt->alternate) {
             execute(ifStmt->alternate);
         }
-    }
-    else if (auto blockStmt = std::dynamic_pointer_cast<BlockStatement>(stmt)) {
+}
+
+void Evaluator::execBlockStatement(BlockStatement* blockStmt) {
         auto blockEnv = std::make_shared<Environment>(environment);
         executeBlock(blockStmt->statements, blockEnv);
-    }
-    else if (auto whileStmt = std::dynamic_pointer_cast<WhileStatement>(stmt)) {
+}
+
+void Evaluator::execWhileStatement(WhileStatement* whileStmt) {
         while (evaluate(whileStmt->condition)->isTruthy()) {
             try {
                 execute(whileStmt->body);
@@ -657,8 +682,9 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
                 throw;
             }
         }
-    }
-    else if (auto doWhileStmt = std::dynamic_pointer_cast<DoWhileStatement>(stmt)) {
+}
+
+void Evaluator::execDoWhileStatement(DoWhileStatement* doWhileStmt) {
         do {
             try {
                 execute(doWhileStmt->body);
@@ -670,8 +696,9 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
                 throw;
             }
         } while (evaluate(doWhileStmt->condition)->isTruthy());
-    }
-    else if (auto switchStmt = std::dynamic_pointer_cast<SwitchStatement>(stmt)) {
+}
+
+void Evaluator::execSwitchStatement(SwitchStatement* switchStmt) {
         auto discriminant = evaluate(switchStmt->discriminant);
         bool match = false;
         try {
@@ -695,8 +722,9 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
         } catch (const ReturnException&) {
             throw;
         }
-    }
-    else if (auto forStmt = std::dynamic_pointer_cast<ForStatement>(stmt)) {
+}
+
+void Evaluator::execForStatement(ForStatement* forStmt) {
         auto forEnv = std::make_shared<Environment>(environment);
         auto previous = environment;
         environment = forEnv;
@@ -745,8 +773,9 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
             throw;
         }
         environment = previous;
-    }
-    else if (auto forInStmt = std::dynamic_pointer_cast<ForInStatement>(stmt)) {
+}
+
+void Evaluator::execForInStatement(ForInStatement* forInStmt) {
         auto rightVal = evaluate(forInStmt->right);
         auto forEnv = std::make_shared<Environment>(environment);
         auto previous = environment;
@@ -785,8 +814,9 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
             throw;
         }
         environment = previous;
-    }
-    else if (auto forOfStmt = std::dynamic_pointer_cast<ForOfStatement>(stmt)) {
+}
+
+void Evaluator::execForOfStatement(ForOfStatement* forOfStmt) {
         auto rightVal = evaluate(forOfStmt->right);
         auto forEnv = std::make_shared<Environment>(environment);
         auto previous = environment;
@@ -875,22 +905,24 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
             throw;
         }
         environment = previous;
-    }
-    else if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(stmt)) {
+}
+
+void Evaluator::execFunctionDeclaration(FunctionDeclaration* funcDecl) {
         // Handled in hoist phase
-    }
-    else if (auto classDecl = std::dynamic_pointer_cast<ClassDeclaration>(stmt)) {
+}
+
+void Evaluator::execClassDeclaration(ClassDeclaration* classDecl) {
         std::shared_ptr<JSFunction> classConstructor;
         
         for (auto method : classDecl->methods) {
             if (method->name == "constructor") {
-                auto decl = std::make_shared<FunctionDeclaration>("constructor", method->parameters, method->body);
+                auto decl = std::make_shared<FunctionDeclaration>(classDecl->name, method->parameters, method->body);
                 classConstructor = std::make_shared<JSFunction>(decl, environment);
                 break;
             }
         }
         if (!classConstructor) {
-            auto decl = std::make_shared<FunctionDeclaration>("constructor", std::vector<std::pair<std::string, std::shared_ptr<Expression>>>(), std::make_shared<BlockStatement>(std::vector<std::shared_ptr<Statement>>{}));
+            auto decl = std::make_shared<FunctionDeclaration>(classDecl->name, std::vector<std::pair<std::string, std::shared_ptr<Expression>>>(), std::make_shared<BlockStatement>(std::vector<std::shared_ptr<Statement>>{}));
             classConstructor = std::make_shared<JSFunction>(decl, environment);
         }
         
@@ -916,47 +948,19 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
         classConstructor->prototypeProperty = prototype;
         prototype->properties["constructor"].value = classConstructor;
         environment->define(classDecl->name, classConstructor);
-    }
-    else if (auto returnStmt = std::dynamic_pointer_cast<ReturnStatement>(stmt)) {
+}
+
+void Evaluator::execReturnStatement(ReturnStatement* returnStmt) {
         std::shared_ptr<JSValue> value = std::make_shared<JSUndefined>();
         if (returnStmt->argument) {
             value = evaluate(returnStmt->argument);
         }
         throw ReturnException(value);
-    }
-    else if (std::dynamic_pointer_cast<BreakStatement>(stmt)) {
-        throw BreakException();
-    }
-    else if (std::dynamic_pointer_cast<ContinueStatement>(stmt)) {
-        throw ContinueException();
-    }
-    else if (auto throwStmt = std::dynamic_pointer_cast<ThrowStatement>(stmt)) {
-        throw JSException(evaluate(throwStmt->argument));
-    }
-    else if (auto tryStmt = std::dynamic_pointer_cast<TryStatement>(stmt)) {
-        try {
-            executeBlock(tryStmt->block->statements, std::make_shared<Environment>(environment));
-        } catch (const JSException& e) {
-            if (tryStmt->handler) {
-                auto catchEnv = std::make_shared<Environment>(environment);
-                if (!tryStmt->param.empty()) {
-                    catchEnv->define(tryStmt->param, e.value);
-                }
-                executeBlock(tryStmt->handler->statements, catchEnv);
-            }
-        } catch (const RuntimeError& e) {
-            if (tryStmt->handler) {
-                auto catchEnv = std::make_shared<Environment>(environment);
-                if (!tryStmt->param.empty()) {
-                    catchEnv->define(tryStmt->param, std::make_shared<JSString>(e.what()));
-                }
-                executeBlock(tryStmt->handler->statements, catchEnv);
-            }
-        }
-        if (tryStmt->finalizer) {
-            executeBlock(tryStmt->finalizer->statements, std::make_shared<Environment>(environment));
-        }
-    }
+}
+
+void Evaluator::execute(std::shared_ptr<Statement> stmt) {
+    if (!stmt) return;
+    stmt->execute(this);
 }
 
 
@@ -1019,22 +1023,25 @@ std::shared_ptr<JSValue> Evaluator::executeFunction(std::shared_ptr<JSValue> cal
     throw RuntimeError("TypeError: callee is not a function");
 }
 
-std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
-    if (auto num = std::dynamic_pointer_cast<NumberLiteral>(expr)) {
+std::shared_ptr<JSValue> Evaluator::evalNumberLiteral(NumberLiteral* num) {
         return std::make_shared<JSNumber>(num->value);
-    }
-    if (auto str = std::dynamic_pointer_cast<StringLiteral>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalStringLiteral(StringLiteral* str) {
         return std::make_shared<JSString>(str->value);
-    }
-    if (auto boolLit = std::dynamic_pointer_cast<BooleanLiteral>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalBooleanLiteral(BooleanLiteral* boolLit) {
         return std::make_shared<JSBoolean>(boolLit->value);
-    }
-    if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalIdentifier(Identifier* id) {
         if (id->name == "undefined") return std::make_shared<JSUndefined>();
         if (id->name == "null") return std::make_shared<JSNull>();
         return environment->get(id->name);
-    }
-    if (auto arrLit = std::dynamic_pointer_cast<ArrayLiteral>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalArrayLiteral(ArrayLiteral* arrLit) {
         auto arr = std::make_shared<JSArray>();
         for (const auto& elem : arrLit->elements) {
             if (auto spread = std::dynamic_pointer_cast<SpreadElement>(elem)) {
@@ -1055,34 +1062,39 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             }
         }
         return arr;
-    }
-    if (auto objLit = std::dynamic_pointer_cast<ObjectLiteral>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalObjectLiteral(ObjectLiteral* objLit) {
         auto obj = std::make_shared<JSObject>();
         obj->prototype = objectPrototype;
         for (const auto& prop : objLit->properties) {
             obj->properties[prop.key].value = evaluate(prop.value);
         }
         return obj;
-    }
-    if (auto funcExpr = std::dynamic_pointer_cast<FunctionExpression>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalFunctionExpression(FunctionExpression* funcExpr) {
         auto decl = std::make_shared<FunctionDeclaration>(funcExpr->name, funcExpr->parameters, funcExpr->body);
         return std::make_shared<JSFunction>(decl, environment);
-    }
-    if (auto arrowExpr = std::dynamic_pointer_cast<ArrowFunctionExpression>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalArrowFunctionExpression(ArrowFunctionExpression* arrowExpr) {
         auto decl = std::make_shared<FunctionDeclaration>("", arrowExpr->parameters, arrowExpr->body);
         auto func = std::make_shared<JSFunction>(decl, environment);
         func->isArrow = true;
         return func;
-    }
-    if (auto tpl = std::dynamic_pointer_cast<TemplateLiteralExpression>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalTemplateLiteralExpression(TemplateLiteralExpression* tpl) {
         std::string result = "";
         for (const auto& part : tpl->parts) {
             auto val = evaluate(part);
             result += val->toString();
         }
         return std::make_shared<JSString>(result);
-    }
-    if (auto regex = std::dynamic_pointer_cast<RegexLiteralExpression>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalRegexLiteralExpression(RegexLiteralExpression* regex) {
         auto obj = std::make_shared<JSObject>();
         obj->properties["source"].value = std::make_shared<JSString>(regex->pattern);
         obj->properties["flags"].value = std::make_shared<JSString>(regex->flags);
@@ -1108,12 +1120,14 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
         });
 
         return obj;
-    }
-    if (auto condExpr = std::dynamic_pointer_cast<ConditionalExpression>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalConditionalExpression(ConditionalExpression* condExpr) {
         auto testVal = evaluate(condExpr->test);
         return testVal->isTruthy() ? evaluate(condExpr->consequent) : evaluate(condExpr->alternate);
-    }
-    if (auto assign = std::dynamic_pointer_cast<AssignmentExpression>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalAssignmentExpression(AssignmentExpression* assign) {
         auto value = evaluate(assign->value);
         std::string varName;
         
@@ -1234,8 +1248,9 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             return value;
         }
         throw RuntimeError("ReferenceError: Invalid left-hand side in assignment");
-    }
-    if (auto update = std::dynamic_pointer_cast<UpdateExpression>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalUpdateExpression(UpdateExpression* update) {
         std::string varName;
         std::shared_ptr<JSValue> current = std::make_shared<JSUndefined>();
         std::shared_ptr<JSObject> targetObj;
@@ -1311,8 +1326,9 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
         }
         
         return update->isPrefix ? newJsVal : std::make_shared<JSNumber>(oldVal);
-    }
-    if (auto unary = std::dynamic_pointer_cast<UnaryExpression>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalUnaryExpression(UnaryExpression* unary) {
         auto arg = evaluate(unary->argument);
         if (unary->op == TokenType::MINUS) {
             return std::make_shared<JSNumber>(-arg->toNumber());
@@ -1333,8 +1349,10 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
                 case JSValueType::NATIVE_FUNCTION: return std::make_shared<JSString>("function");
             }
         }
-    }
-    if (auto binary = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
+    return std::make_shared<JSUndefined>();
+}
+
+std::shared_ptr<JSValue> Evaluator::evalBinaryExpression(BinaryExpression* binary) {
         auto left = evaluate(binary->left);
         if (binary->op == TokenType::LOGICAL_AND) {
             return left->isTruthy() ? evaluate(binary->right) : left;
@@ -1417,8 +1435,10 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             default:
                 break;
         }
-    }
-    if (auto call = std::dynamic_pointer_cast<CallExpression>(expr)) {
+        return std::make_shared<JSUndefined>();
+}
+
+std::shared_ptr<JSValue> Evaluator::evalCallExpression(CallExpression* call) {
         class CallStackGuard {
             int& depth;
         public:
@@ -1474,8 +1494,9 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
         }
 
         return executeFunction(callee, thisContext, args);
-    }
-    if (auto member = std::dynamic_pointer_cast<MemberExpression>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalMemberExpression(MemberExpression* member) {
         auto obj = evaluate(member->object);
         lastThisContext = obj;
         
@@ -1539,14 +1560,65 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             return std::make_shared<JSUndefined>();
         }
 
-        if (obj->getType() == JSValueType::FUNCTION) {
-            if (propName == "prototype") {
-                auto funcObj = std::dynamic_pointer_cast<JSFunction>(obj);
-                if (funcObj && funcObj->prototypeProperty) return funcObj->prototypeProperty;
-                return std::make_shared<JSUndefined>();
+        if (obj->getType() == JSValueType::FUNCTION || obj->getType() == JSValueType::NATIVE_FUNCTION) {
+            if (propName == "call") {
+                return std::make_shared<JSNativeFunction>("call", [this, obj](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+                    std::shared_ptr<JSValue> thisCtx = std::make_shared<JSUndefined>();
+                    if (!args.empty()) thisCtx = args[0];
+                    std::vector<std::shared_ptr<JSValue>> callArgs;
+                    if (args.size() > 1) {
+                        for (size_t i = 1; i < args.size(); ++i) callArgs.push_back(args[i]);
+                    }
+                    return this->executeFunction(obj, thisCtx, callArgs);
+                });
             }
-            // Functions in V1 don't have prototype chain property lookup yet unless they inherit from JSObject properly.
-            // For now, only prototype property is supported.
+            if (obj->getType() == JSValueType::FUNCTION) {
+                auto funcObj = std::dynamic_pointer_cast<JSFunction>(obj);
+                if (propName == "prototype") {
+                    if (funcObj && funcObj->prototypeProperty) return funcObj->prototypeProperty;
+                    return std::make_shared<JSUndefined>();
+                }
+                if (funcObj->declaration && funcObj->declaration->name == "Promise") {
+                    if (propName == "resolve") {
+                        return std::make_shared<JSNativeFunction>("resolve", [this](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+                            std::string code = "new Promise(function(resolve) { resolve(args_val); })";
+                            Lexer lexer(code);
+                            Parser parser(lexer.tokenize());
+                            auto ast = parser.parse();
+                            auto oldEnv = this->environment;
+                            this->environment = std::make_shared<Environment>(oldEnv);
+                            this->environment->define("args_val", args.empty() ? std::shared_ptr<JSValue>(std::make_shared<JSUndefined>()) : args[0]);
+                            std::shared_ptr<JSValue> result = std::make_shared<JSUndefined>();
+                            if (!ast->body.empty()) {
+                                if (auto exprStmt = std::dynamic_pointer_cast<ExpressionStatement>(ast->body[0])) {
+                                    result = this->evaluate(exprStmt->expression);
+                                }
+                            }
+                            this->environment = oldEnv;
+                            return result;
+                        });
+                    }
+                    if (propName == "reject") {
+                        return std::make_shared<JSNativeFunction>("reject", [this](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+                            std::string code = "new Promise(function(resolve, reject) { reject(args_val); })";
+                            Lexer lexer(code);
+                            Parser parser(lexer.tokenize());
+                            auto ast = parser.parse();
+                            auto oldEnv = this->environment;
+                            this->environment = std::make_shared<Environment>(oldEnv);
+                            this->environment->define("args_val", args.empty() ? std::shared_ptr<JSValue>(std::make_shared<JSUndefined>()) : args[0]);
+                            std::shared_ptr<JSValue> result = std::make_shared<JSUndefined>();
+                            if (!ast->body.empty()) {
+                                if (auto exprStmt = std::dynamic_pointer_cast<ExpressionStatement>(ast->body[0])) {
+                                    result = this->evaluate(exprStmt->expression);
+                                }
+                            }
+                            this->environment = oldEnv;
+                            return result;
+                        });
+                    }
+                }
+            }
             return std::make_shared<JSUndefined>();
         }
         
@@ -1569,11 +1641,24 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             return std::make_shared<JSUndefined>();
         }
         throw RuntimeError("TypeError: Cannot read property '" + propName + "' of undefined or primitive");
-    }
-    if (auto newExpr = std::dynamic_pointer_cast<NewExpression>(expr)) {
-        auto callee = evaluate(newExpr->callee);
-        std::vector<std::shared_ptr<JSValue>> args;
-        for (const auto& argExpr : newExpr->arguments) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalNewExpression(NewExpression* newExpr) {
+          if (auto id = std::dynamic_pointer_cast<Identifier>(newExpr->callee)) {
+              if (id->name == "Date") {
+                  auto dateObj = std::make_shared<JSObject>();
+                  dateObj->properties["getTime"].value = std::make_shared<JSNativeFunction>("getTime", [](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+                      auto now = std::chrono::system_clock::now();
+                      auto duration = now.time_since_epoch();
+                      auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+                      return std::make_shared<JSNumber>(millis);
+                  });
+                  return dateObj;
+              }
+          }
+          auto callee = evaluate(newExpr->callee);
+          std::vector<std::shared_ptr<JSValue>> args;
+          for (const auto& argExpr : newExpr->arguments) {
             if (auto spread = std::dynamic_pointer_cast<SpreadElement>(argExpr)) {
                 auto spreadVal = evaluate(spread->argument);
                 if (spreadVal->getType() == JSValueType::ARRAY) {
@@ -1589,20 +1674,11 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
                 args.push_back(evaluate(argExpr));
             }
         }
-
-        if (auto id = std::dynamic_pointer_cast<Identifier>(newExpr->callee)) {
-            if (id->name == "Date") {
-                auto dateObj = std::make_shared<JSObject>();
-                dateObj->properties["getTime"].value = std::make_shared<JSNativeFunction>("getTime", [](const std::vector<std::shared_ptr<JSValue>>& args) {
-                    auto now = std::chrono::system_clock::now();
-                    auto duration = now.time_since_epoch();
-                    auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-                    return std::make_shared<JSNumber>(millis);
-                });
-                return dateObj;
-            }
-        }
         
+        if (callee->getType() == JSValueType::NATIVE_FUNCTION) {
+            auto nativeFunc = std::dynamic_pointer_cast<JSNativeFunction>(callee);
+            return nativeFunc->func(args);
+        }
         if (callee->getType() == JSValueType::FUNCTION) {
             auto func = std::dynamic_pointer_cast<JSFunction>(callee);
             
@@ -1646,8 +1722,9 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             return newObj;
         }
         throw RuntimeError("TypeError: callee is not a constructor");
-    }
-    if (auto superExpr = std::dynamic_pointer_cast<SuperExpression>(expr)) {
+}
+
+std::shared_ptr<JSValue> Evaluator::evalSuperExpression(SuperExpression* superExpr) {
         auto thisObj = environment->get("this");
         if (thisObj->getType() == JSValueType::OBJECT) {
             auto jsObj = std::dynamic_pointer_cast<JSObject>(thisObj);
@@ -1659,17 +1736,11 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             }
         }
         throw RuntimeError("TypeError: super property not found");
-    }
-    if (std::dynamic_pointer_cast<ThisExpression>(expr)) {
-        try {
-            return environment->get("this");
-        } catch (...) {
-            // Global scope 'this' is undefined in strict mode
-            return std::make_shared<JSUndefined>();
-        }
-    }
-    
-    return std::make_shared<JSUndefined>();
+}
+
+std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
+    if (!expr) return std::make_shared<JSUndefined>();
+    return expr->eval(this);
 }
 
 extern JSValue* gc_head;
@@ -1797,4 +1868,21 @@ void Evaluator::markAndSweep() {
         else gc_head = marker.gc_next;
         if (marker.gc_next) marker.gc_next->gc_prev = marker.gc_prev;
     }
+}
+
+void Evaluator::execContinueStatement(ContinueStatement* stmt) {
+    throw ContinueException();
+}
+void Evaluator::execBreakStatement(BreakStatement* stmt) {
+    throw BreakException();
+}
+std::shared_ptr<JSValue> Evaluator::evalThisExpression(ThisExpression* expr) {
+    try {
+        return environment->get("this");
+    } catch (...) {
+        return std::make_shared<JSUndefined>();
+    }
+}
+std::shared_ptr<JSValue> Evaluator::evalSpreadElement(SpreadElement* expr) {
+    throw RuntimeError("spread element not implemented directly");
 }
