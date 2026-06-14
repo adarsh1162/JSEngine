@@ -196,6 +196,7 @@ void Evaluator::interpret(std::shared_ptr<Program> program) {
         for (const auto& stmt : program->body) {
             hoist(stmt);
         }
+        registerTDZ(program->body, environment);
         for (const auto& stmt : program->body) {
             execute(stmt);
         }
@@ -213,6 +214,7 @@ void Evaluator::executeBlock(const std::vector<std::shared_ptr<Statement>>& stat
     auto previous = environment;
     try {
         environment = env;
+        registerTDZ(statements, environment);
         for (const auto& stmt : statements) {
             execute(stmt);
         }
@@ -223,6 +225,23 @@ void Evaluator::executeBlock(const std::vector<std::shared_ptr<Statement>>& stat
     }
 }
 
+void Evaluator::registerTDZ(const std::vector<std::shared_ptr<Statement>>& statements, std::shared_ptr<Environment> env) {
+    for (const auto& stmt : statements) {
+        if (auto varDecl = std::dynamic_pointer_cast<VariableDeclaration>(stmt)) {
+            if (!varDecl->isVar) {
+                env->defineTdz(varDecl->name, varDecl->isConst);
+            }
+        } else if (auto destDecl = std::dynamic_pointer_cast<DestructuringDeclaration>(stmt)) {
+            if (!destDecl->isVar) {
+                for (const auto& name : destDecl->names) {
+                    env->defineTdz(name, destDecl->isConst);
+                }
+            }
+        } else if (auto classDecl = std::dynamic_pointer_cast<ClassDeclaration>(stmt)) {
+            env->defineTdz(classDecl->name, false);
+        }
+    }
+}
 
 void Evaluator::execute(std::shared_ptr<Statement> stmt) {
     if (auto varDecl = std::dynamic_pointer_cast<VariableDeclaration>(stmt)) {

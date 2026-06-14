@@ -1,91 +1,89 @@
-**1. Arrow Functions ka Lexical `this` Binding Missing Hai**
+Bhai, agar tumhara focus abhi **V1 (AST-based Tree-Walking Evaluator)** par hi hai aur V2 (Bytecode VM) ko chhodna chahte ho, toh ye ek bahut practical decision hai. V1 mein logic implement karna aur naye features add karna kaafi aasan hota hai. Top-tier engines (jaise JavaScriptCore aur V8) bhi pehle AST par hi kaam karte hain (unka Ignition/Interpreter phase) aur baad mein JIT par jate hain.
 
-* **Problem:** JavaScript mein Arrow Functions (`() => {}`) ka apna koi `this` context nahi hota; wo apne parent scope ka `this` inherit karte hain.
-* **Kyu fail hoga:** Tumhare `evaluator.cpp` mein, jab `CallExpression` run hota hai, toh Arrow Function aur Normal Function dono ko ek hi tarah treat kiya gaya hai. Agar tum class method ke andar `setTimeout` mein arrow function use karoge, toh uska `this` galat bind ho jayega ya `undefined` aayega, jabki use class ka instance point karna chahiye.
+Bina kisi sugarcoating ke, ek **Tree-Walking Interpreter ke standards par V1 ko main 9/10 rate karunga.** Tumne pichle iteration mein `===` ka pointer check, `super()` context, aur regex waghera fix karke isko ekdam solid bana diya hai.
 
-**2. Promises aur Microtask Queue (Async/Await State Machine)**
+Par kyunki V1 C++ ke `std::shared_ptr` aur recursive functions par based hai, isme kuch **Core Architectural Limitations** hain jo V1 design ki wajah se deeply rooted hain. Ye wo hardcore limitations hain jinhe fix karna abhi baaki hai:
 
-* **Problem:** Tumne Parser aur Lexer mein `async` aur `await` keywords toh add kar diye hain, aur Macro-tasks (`setTimeout`) ka ek basic Event Loop bhi bana liya hai. Lekin **Promises** natively missing hain.
-* **Kyu fail hoga:** JS mein `await` keyword call-stack ko pause kar deta hai aur function ka bacha hua code Microtask Queue mein daal deta hai. Tumhara engine abhi `Promise` object aur Microtask queue ko resolve nahi kar sakta, toh actual async/await code execute nahi hoga.
+### 1. The `std::shared_ptr` Trap: Cyclic Memory Leaks (Sabse Badi Problem)
 
-**3. Regex Literal Execution (Sirf Dummy Object hai)**
-
-* **Problem:** Tumne Parser mein Regular Expressions (`/pattern/g`) ko bahut smartly parse kar liya aur Evaluator mein ek object bhi bana diya jisme `source` aur `flags` hain.
-* **Kyu fail hoga:** Asli JS mein Regex objects ke paas `.test()`, `.exec()`, aur strings ke paas `.match()` methods hote hain. Tumne `builtins.cpp` mein actual pattern matching (C++ ki `<regex>` library use karke) implement nahi ki hai. Isliye `/hello/.test("hello world")` fail ho jayega.
-
-**4. Cyclic Reference Memory Leaks (Garbage Collection Flaw)**
-
-* **Problem:** Engine variables aur objects store karne ke liye `std::shared_ptr` ka use kar raha hai. Yeh memory management ke liye easy aur smart hack hai, par JS object references ke case mein fail ho jata hai.
-* **Kyu fail hoga:** Agar koi JS dev aapas mein do objects ko link kar de:
+* **Kyu fail hoga:** V1 engine mein har JS variable aur object `std::shared_ptr<JSValue>` se managed hai. C++ ka `shared_ptr` reference counting par kaam karta hai. Agar JS code mein do objects ek dusre ko refer karein:
 ```javascript
 let objA = {}; let objB = {};
 objA.child = objB; 
-objB.parent = objA; // Cyclic Reference
+objB.parent = objA;
 
 ```
 
 
-Is case mein dono objects ek doosre ko point karenge. Inka `shared_ptr` reference count kabhi 0 nahi hoga aur memory leak ho jayegi. Asli JS engines (Mark-and-Sweep) Garbage Collector use karte hain.
+Toh yahan ek "Cyclic Reference" ban jayega. V1 ka `Environment` jab destroy hoga, tab bhi in dono objects ka reference count kabhi 0 nahi hoga. Result? **Memory Leak**. Agar tumhara engine kisi server par lambe samay tak chalega, toh RAM full hoke crash ho jayega kyunki V1 mein "Mark-and-Sweep" Garbage Collector nahi lagaya ja sakta (wo raw pointers pe chalta hai, shared_ptr pe nahi).
 
-**5. Modules (`import` / `export`)**
+### 2. C++ Call Stack Overflow (Deep Recursion Crash)
 
-* **Problem:** Abhi engine strictly ek single file execute karne ke liye design hai.
-* **Kyu fail hoga:** `import` aur `export` tokens defined nahi hain. Agar tumhe NPM packages ya multiple JS files ka modular architecture banana ho, toh module resolution aur file linking abhi engine handle nahi kar sakta.
+* **Kyu fail hoga:** Tera V1 `Evaluator::evaluate()` aur `Evaluator::execute()` function AST nodes ko traverse karne ke liye C++ ki native recursion use karta hai. Iska matlab JS ki har function call ke liye C++ call stack mein ek frame banta hai.
+* **Proof:** C++ ka call stack limit usually 1MB se 8MB hota hai. Agar koi JS dev deep recursion likh de (jaise 10,000 times), toh V1 engine seedha **"Segmentation Fault"** dega aur poora program bina kisi JS try/catch ke terminate ho jayega. Asli JS engines call frames heap par banate hain taaki stack overflow gracefully handle ho.
 
-**6. Hoisting mein `let` aur `const` ka Temporal Dead Zone (TDZ)**
+### 3. Property Descriptors aur Getters/Setters Missing Hain
 
-* **Problem:** Tumne `hoist()` method likha hai jisme `var` ko `undefined` se initialize kar diya hai (jo ki ekdum sahi JS behaviour hai). Lekin `let` aur `const` variable declare hone se pehle agar access kiye jayein toh `ReferenceError` aana chahiye (TDZ). Tumhara engine abhi TDZ strictness enforce nahi karta.
+* **Kyu fail hoga:** V1 ke `JSObject` mein properties sirf `std::unordered_map<std::string, std::shared_ptr<JSValue>> properties` mein store hoti hain.
+* **Missing Feature:** Agar JS mein koi custom Getter/Setter banata hai ya `Object.defineProperty(obj, 'key', { get: function() { return 5; } })` use karta hai, toh V1 fail ho jayega. V1 mein kisi property ko *access* karte waqt kisi hidden function ko execute karne ka architecture hi nahi hai. Wo bas map se value nikal kar de deta hai.
 
-Bhai Adarsh, tumne codebase ko jis level par upgrade kiya hai, wo sach mein kaafi impressive hai. Ab jab tumne basic aur intermediate limitations (destructuring, try-catch, this binding, async event loop) fix kar di hain, toh chalo is engine ka **"Extreme Deep Dive"** karte hain.
+### 4. Microtask Queue aur Promises ki Kami
 
-Agar hum isko V8 (Chrome) ya SpiderMonkey (Firefox) jaise production-level JS engines se compare karein, toh abhi bhi architecture mein kuch aisi **deep foundational limitations** hain jo complex JS libraries (jaise React ya lodash) ko run nahi hone dengi.
+* **Kyu fail hoga:** Tune `evaluator.cpp` mein Event Loop (`runEventLoop`) likh diya hai, jo ki outstanding hai! Par wo sirf `setTimeout` aur `setInterval` (Macrotasks) ke queue ko maintain karta hai.
+* **Missing Feature:** JavaScript mein `Promise`, `async`, aur `await` Microtask queue mein jate hain jo har Macrotask ke baad turant execute hoti hai. V1 mein Call-stack ko pause/resume karne wali State Machine nahi hai, toh V1 abhi native Promises aur async/await properly execute nahi kar sakta.
 
-Yahan wo strictly advanced limitations hain jo abhi bhi tumhare engine mein baaki hain:
+### 5. Temporal Dead Zone (TDZ) for `let` & `const`
 
-### 1. Object Identity aur Strict Equality (`===`) ka FLAW (Critical Bug)
+* **Kyu fail hoga:** JS mein `let` aur `const` hoist hote hain, par unhe initialize hone se pehle access karne par `ReferenceError` aana chahiye.
+* **Proof:** Tera `Environment` variable store karta hai, par ye track nahi karta ki variable abhi TDZ mein hai ya initialize ho chuka hai. Agar galti se kisi block mein `let` declare hone se pehle access hua (hoisting ki wajah se), toh wo C++ exception handle karne mein slightly off behave kar sakta hai.
 
-* **Problem:** Tumhare engine mein `{} === {}` evaluate karne par `true` aayega, jabki asli JavaScript mein ye hamesha `false` aana chahiye.
-* **Kyu fail hoga:** `evaluator.cpp` mein `TokenType::STRICT_EQUAL` ke logic mein tumne fallback ke liye `left->toString() == right->toString()` use kiya hai. Kyunki `JSObject` ka `toString()` hamesha `"[object Object]"` return karta hai, engine ko lagega ki dono objects same hain. Asli JS engine objects ko unke **Memory Reference (Pointer identity)** se compare karta hai, unki string value se nahi.
+### 6. `for...of` Loop bina Iterator Protocol (`Symbol.iterator`) ke
 
-### 2. `super()` Constructor Call Broken Hai (OOP Limitation)
+* **Kyu fail hoga:** `evaluator.cpp` ke `forOfStmt` execution mein dhyan se dekho: tune hardcode kar diya hai ki agar `rightVal->getType() == JSValueType::ARRAY` ya `STRING` hai, toh C++ level par loop chala do.
+* **Missing Feature:** Asli JS mein `for...of` us object par chalta hai jiske paas `[Symbol.iterator]()` function ho. Kyunki V1 mein custom iterators (generators) handle nahi hote, koi bhi NodeList ya user-defined iterable collection is loop mein crash (`TypeError: rhs is not iterable`) phek dega.
 
-* **Problem:** Tumne classes aur inheritance (`extends`) add toh kar diya hai, par Child class ke constructor mein `super()` call karke Parent class ko initialize karne ka logic adhura hai.
-* **Kyu fail hoga:** `evaluator.cpp` mein jab `SuperExpression` evaluate hota hai, toh wo sirf parent ka `prototype` object return kar deta hai: `return proto->prototype;`. Agar user ne likha `class Dog extends Animal { constructor() { super("Tommy"); } }`, toh ye fail ho jayega kyunki `super` yahan function ki tarah call nahi ho pa raha hai jo parent ke `constructor` method ko current `this` context mein execute kare.
+Bhai Adarsh, tumhare V1 engine (AST Evaluator) ko aur bhi microscopic level par analyze karne ke baad kuch aisi baatein samne aayi hain jo sidha tumhare dusre sawal ka jawab deti hain.
 
-### 3. Iterators aur Generators Missing Hain (`Symbol.iterator` / `yield`)
+Sabse pehle tumhare is sawal ka seedha jawab deta hu: **Kya hamara engine standard JS libraries (jaise Lodash, React, ya Express) ko support karta hai?**
 
-* **Problem:** JS mein `for...of` loop under the hood `Symbol.iterator` protocol par kaam karta hai. Tumne `for...of` ko C++ level par sirf Array aur String ke liye hardcode kar diya hai.
-* **Kyu fail hoga:** Agar koi custom iterable object banata hai ya DOM collections (jaise NodeList) use karta hai, toh tumhara engine `TypeError: rhs is not iterable` phek dega. Iske alawa, Parser mein `function*` (Generators) aur `yield` keyword exist nahi karte, jo modern JS streams aur complex iterators ki jaan hote hain.
+**Kada Sach: Nahi.** Abhi tumhara engine kisi bhi standard JS library ko run nahi kar payega. Ek JS library ko chalne ke liye sirf loops aur if/else nahi chahiye hote, balki ek poora ecosystem chahiye hota hai jo abhi engine mein missing hai. Yahan iske specific reasons aur **Nayi Deep Limitations** hain:
 
-### 4. Getters aur Setters ka Concept Nahi Hai (`get` / `set`)
+### 7. The Module System is Missing (`require` / `import`)
 
-* **Problem:** JS mein hum objects aur classes ke andar dynamically values compute karne ke liye `get propName()` aur `set propName(val)` use karte hain (jise `Object.defineProperty` se bhi achieve kiya jata hai).
-* **Kyu fail hoga:** Tumhare engine mein `JSObject->properties` strictly ek `std::unordered_map<std::string, std::shared_ptr<JSValue>>` hai. Isme value direct read/write hoti hai. Jab object ki property access ki jaye tab kisi hidden function ko trigger (Invoke) karne ka koi architecture nahi hai.
+* **Kyu fail hoga:** Koi bhi standard library ek single file nahi hoti. Lodash ho ya React, wo multiple files mein split hoti hain. Tumhare engine mein file system ko read karke doosri JS file ko current file mein link karne ka koi tarika nahi hai (`import {} from '...'` ya `require('...')`). Engine sirf ek static script ko shuru se ant tak chalata hai.
 
-### 5. Call Stack Tracing aur `Error` Objects
+### 8. Missing Core ECMAScript Objects (`JSON`, `Object`, `Map`, `Set`)
 
-* **Problem:** JS mein jab hum `throw new Error("Oops")` karte hain, toh engine ek pura "Stack Trace" banata hai ki error kis function se aayi aur line number kya tha.
-* **Kyu fail hoga:** Tumhare engine mein C++ `throw JSException(value);` bahut beautifully kaam kar raha hai, par JS level par ye stack trace generate nahi karta. Kyunki tumne koi "Call Stack" (functions ke execution frames ka track) natively maintain nahi kiya hai, debugging complex errors in your JS scripts nightmare ban jayega.
-
-### 6. Number Precision aur `BigInt` (Bitwise limitations)
-
-* **Problem:** JS mein numbers strictly 64-bit float hote hain (jo tumne `double` use karke handle kiya hai), par Bitwise operations strictly 32-bit integers par hote hain.
-* **Kyu fail hoga:** `evaluator.cpp` mein tumne bitwise operators ke liye `static_cast<int>(left->toNumber())` use kiya hai. C++ mein `int` ka size OS aur architecture par depend karta hai (kabhi 16-bit, mostly 32-bit). Ye standard ECMAScript rules ke slightly against hai jahan exactly 32-bit math expect ki jati hai. Iske alawa, ES2020 ka `BigInt` (`100n`) completely missing hai, toh bohot bade numbers par precision loss hoga.
-
-### 7. Lexical Environment mein Memory Leaks (Garbage Collection Flaw)
-
-* **Problem:** V1/V2 engine architecture mein memory management ke liye tum `std::shared_ptr` ka use kar rahe ho, jabki ek proper JS engine ko "Mark and Sweep" ya "Generational" Garbage Collector chahiye hota hai.
-* **Kyu fail hoga:** Agar koi user ye code likh de:
-```javascript
-let a = {}; let b = {};
-a.child = b; b.parent = a; 
-
-```
+* **Kyu fail hoga:** Tumne `builtins.cpp` mein `Math` aur `console` banaya hai. Par standard libraries heavy data manipulation karti hain.
+* `JSON.parse()` aur `JSON.stringify()` native C++ level par missing hain.
+* Objects ke standard methods jaise `Object.keys()`, `Object.assign()`, `Object.defineProperty()` nahi hain.
+* Modern libraries ES6 Data Structures jaise `Map`, `Set`, `WeakMap`, aur `Proxy` ka use karti hain, jinke AST nodes ya C++ types engine mein exist hi nahi karte.
 
 
-Ye ek "Cyclic Reference" hai. Yahan `shared_ptr` ka reference count kabhi `0` nahi hoga. Engine infinite time tak chalega toh aise objects ki wajah se RAM full hoti jayegi aur C++ memory leak dega. V8 engine cyclic memory detect kar leta hai par `std::shared_ptr` akele nahi kar sakta.
 
-**Conclusion:**
-Tumhara C++ interpreter ek advanced "Tree-Walking Evaluator" ban chuka hai jo production engines (V8/SpiderMonkey) ke **AST Generation phase** ko perfectly mimic kar raha hai.
+### 9. Missing Host APIs (DOM ya Node.js APIs)
 
-Par ye jo upar wale points hain (Iterators, GC, Stack Traces, proper OOP Super calls), inke liye **Bytecode Virtual Machine (JIT Compiler)** ki zaroorat padti hai, jo AST parse hone ke baad code ko C++ memory ke bajaye direct low-level bytecode aur Memory Heaps mein convert kare. Tumne project details mein `V2 (Bytecode VM)` mention kiya tha—wahi in extreme limitations ko finally solve karega!
+* **Kyu fail hoga:** JS runtime do hisso mein banta hai: "JS Engine" (jo tumne banaya hai) aur "Host Environment" (Browser ya Node).
+* Agar tum React chalana chahoge, toh usko `document.createElement` (DOM API) chahiye jo engine mein nahi hai.
+* Agar tum Express (Server) chalana chahoge, toh usko Network Sockets aur `fs` (File System) APIs chahiye jo C++ mein bind nahi kiye gaye hain.
+
+
+
+### 10. The Implicit `arguments` Object is Missing
+
+* **Kyu fail hoga:** ES6 ke Arrow functions aane se pehle, har normal function ke andar JS automatically ek `arguments` naam ka object inject karta tha jisme saare parameters hote the. Purani libraries iska daba ke use karti hain. Tumhare `evaluator.cpp` ke Function Execution phase mein "arguments" naam ke keyword ko environment mein define nahi kiya gaya hai. Agar JS code mein `arguments.length` likha gaya, toh wo `ReferenceError` dega.
+
+### 11. `Object.prototype` Chain ka Adhura Hona
+
+* **Kyu fail hoga:** Har JS library variable types check karne ke liye `Object.prototype.toString.call(value)` ya `obj.hasOwnProperty('key')` ka use karti hai. Tumhare engine mein `JSObject` class toh hai, par uske prototype mein native functions bind nahi kiye gaye hain. Ek khali object `{}` ke paas `.hasOwnProperty()` method exist nahi karta.
+
+### 12. The Massive AST Traversal Performance Overhead
+
+* **Kyu fail hoga:** Ye ek architectural limitation hai. Jab tum ek `while` loop ya `for` loop chalate ho, toh V1 engine har single iteration mein **C++ AST (Abstract Syntax Tree) ko wapas shuru se padhta hai**.
+* `evaluator.cpp` mein lagatar `std::dynamic_pointer_cast` call ho raha hai AST node ka type check karne ke liye. C++ mein dynamic casting bohot slow hoti hai. Agar tum Lodash ka koi bada sorting algorithm chalaoge jisme 1 lakh iterations hain, toh tumhara engine Chrome ke V8 se 1000x zyada slow chalega kyunki V8 code ko Machine Code mein convert kar chuka hota hai, jabki tumhara engine abhi bhi text ki tree-structure ko parse kar raha hota hai.
+
+
+
+### 13. Cascading Deletion Pauses (UI Freeze issue)
+
+* **Kyu fail hoga:** Kyunki V1 `std::shared_ptr` use karta hai, agar kisi block scope ke andar 10,000 objects ka ek bada array banta hai aur loop khatam hone par scope destroy hota hai, toh C++ ka `shared_ptr` destructor un 10,000 objects ki memory ko ek sath synchronously free karega. Isse engine execution ekdam se "Freeze" ya "Halt" ho jayega. Asli engines ka Garbage Collector background thread par dre-dhire memory free karta hai taaki execution na ruke.

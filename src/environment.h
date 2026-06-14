@@ -16,6 +16,7 @@ public:
 struct Variable {
     std::shared_ptr<JSValue> value;
     bool isConst;
+    bool isTdz;
 };
 
 class Environment {
@@ -37,6 +38,9 @@ public:
 
     // Create a new variable (`let` or `const`)
     void define(const std::string& name, std::shared_ptr<JSValue> value, bool isConst = false);
+
+    // Define a variable in TDZ
+    void defineTdz(const std::string& name, bool isConst = false);
 
     // Create a var variable (function scoped)
     void defineVar(const std::string& name, std::shared_ptr<JSValue> value);

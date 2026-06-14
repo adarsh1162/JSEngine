@@ -61,6 +61,7 @@ public:
     std::shared_ptr<JSValue> evaluate(std::shared_ptr<Expression> expr);
     void execute(std::shared_ptr<Statement> stmt);
     void executeBlock(const std::vector<std::shared_ptr<Statement>>& statements, std::shared_ptr<Environment> env);
+    void registerTDZ(const std::vector<std::shared_ptr<Statement>>& statements, std::shared_ptr<Environment> env);
     void hoist(std::shared_ptr<Statement> stmt);
 
     // Builtins
