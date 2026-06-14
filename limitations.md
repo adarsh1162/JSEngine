@@ -87,3 +87,101 @@ Sabse pehle tumhare is sawal ka seedha jawab deta hu: **Kya hamara engine standa
 ### 13. Cascading Deletion Pauses (UI Freeze issue)
 
 * **Kyu fail hoga:** Kyunki V1 `std::shared_ptr` use karta hai, agar kisi block scope ke andar 10,000 objects ka ek bada array banta hai aur loop khatam hone par scope destroy hota hai, toh C++ ka `shared_ptr` destructor un 10,000 objects ki memory ko ek sath synchronously free karega. Isse engine execution ekdam se "Freeze" ya "Halt" ho jayega. Asli engines ka Garbage Collector background thread par dre-dhire memory free karta hai taaki execution na ruke.
+
+
+niche mai solution bhi de rha hu iske tum apna independent solution bhi use kar sakte ho jo hamare V1 engine ke compitable ho ya fir mere solution se idea bhi le sakte ho , but bahut hi carefully limitations ko fix karna , already present code mein koi bhi error na aaye
+
+main in 13 limitations ke ** Best aur Implementable Solutions** de raha hu. Kyunki tum V1 (Tree-walking) ko hi strong banana chahte ho, hum JIT ya Bytecode ki baat nahi karenge, balki C++ AST architecture ko hi optimize karenge.
+
+Yahan har problem ka ekdum solid, point-to-point C++ fix hai:
+
+### 1. `std::shared_ptr` Cyclic Memory Leaks
+
+* **Absolute Solution (Custom Deleter / Arena Allocation):** V1 mein Mark-and-Sweep lagana mushkil hai, par ek 'Arena Allocator' banaya ja sakta hai.
+* **Implementation:** `std::shared_ptr` ka default behaviour hata do. Ek global `std::vector<std::shared_ptr<JSValue>> globalHeap` banao. Jab bhi koi naya object bane, use `globalHeap` mein push karo. Ek background function banao jo periodically check kare (mark and sweep ka V1 version) ki kaunse objects `Environment` se reach nahi ho rahe, aur unhe `globalHeap` se hata de. Ya fir, parent-child relationship mein strictly `std::weak_ptr` ka use karo jahan cycle banne ka darr ho.
+
+### 2. C++ Call Stack Overflow (Deep Recursion Crash)
+
+* **Absolute Solution (Max Call Stack Depth Tracker):** Engine ko crash hone se bachane ke liye JS execution ko gracefully terminate karna hoga.
+* **Implementation:** `evaluator.h` mein ek variable add karo: `int callStackDepth = 0;`. Jab bhi `CallExpression` evaluate ho, `callStackDepth++` karo, aur return aane par `callStackDepth--` karo. Agar `callStackDepth > 1000` (ya koi safe limit) ho jaye, toh C++ level par `throw RuntimeError("RangeError: Maximum call stack size exceeded")` kar do. Isse C++ crash nahi hoga, JS error throw hogi.
+
+### 3. Property Descriptors aur Getters/Setters
+
+* **Absolute Solution (Change JSObject Structure):** `types.h` mein `JSObject` ke andar sirf `JSValue` store mat karo.
+* **Implementation:** Ek struct banao:
+```cpp
+struct PropertyDescriptor {
+    std::shared_ptr<JSValue> value;
+    std::shared_ptr<JSFunction> getter;
+    std::shared_ptr<JSFunction> setter;
+    bool writable = true;
+};
+
+```
+
+
+`JSObject` ke map ko `std::unordered_map<std::string, PropertyDescriptor>` mein badal do. Jab `evaluator.cpp` mein property get ho, toh check karo agar `getter` hai, toh us function ko C++ mein execute karke return value do.
+
+### 4. Microtask Queue aur Promises
+
+* **Absolute Solution (Event Loop Upgrade):** `runEventLoop` ko Macrotasks (setTimeout) aur Microtasks (Promises) mein split karo.
+* **Implementation:** `evaluator.h` mein `std::queue<std::function<void()>> microtaskQueue;` add karo. `builtins.cpp` mein ek native `Promise` class banao jiska `.then()` callback is `microtaskQueue` mein push ho. `runEventLoop` mein har timer (macrotask) chalne ke baad ek `while(!microtaskQueue.empty())` loop chalao aur saare microtasks pehle execute karo.
+
+### 5. Temporal Dead Zone (TDZ) for `let` & `const`
+
+* **Absolute Solution (Initialization Flag):** `environment.h` mein Variable storage ko update karo.
+* **Implementation:** Map ko `std::unordered_map<std::string, Variable>` rakho jahan:
+```cpp
+struct Variable {
+    std::shared_ptr<JSValue> value;
+    bool isConst;
+    bool isInitialized; // Naya flag
+};
+
+```
+
+
+Jab `hoist()` chale, `isInitialized = false` set karo. Jab actual line par execution aaye (`execute()`), toh isko `true` karo. Agar `get()` call ho aur `isInitialized == false` ho, toh `ReferenceError` throw karo.
+
+### 6. `for...of` Loop bina `Symbol.iterator` ke
+
+* **Absolute Solution (Native Iterator Protocol):** Hardcoded Array/String check ko hatao.
+* **Implementation:** V1 ke liye `Symbol` ka C++ workaround banao. Ek specific string literal jaise `"__iterator__"` reserve kar lo. Arrays aur Strings ke prototype mein ye `"__iterator__"` method natively inject karo jo ek object return kare jisme `.next()` method ho. `forOfStmt` ko update karo taaki wo `rhs->properties["__iterator__"]` ko call kare aur `next().done` true hone tak loop chalaye.
+
+### 7. Module System (`require` / `import`)
+
+* **Absolute Solution (Native Require Function):** `setupGlobalEnvironment` mein `require` function add karo.
+* **Implementation:** `require` function parameter mein file path lega. C++ ka `<fstream>` use karke us file ka text read karo. Us text ke liye ek naya `Lexer`, naya `Parser`, aur naya `Evaluator` instance banao (using a separate module environment). End mein us environment se `module.exports` ki value utha kar return kar do.
+
+### 8. ECMAScript Objects (`JSON`, `Map`, `Set`)
+
+* **Absolute Solution (C++ Wrappers in Builtins):** Inhe natively C++ mein implement karo.
+* **Implementation:** * **JSON:** Ek simple Recursive string builder banao `JSON.stringify` ke liye.
+* **Map/Set:** `builtins.cpp` mein nayi classes `JSMap` aur `JSSet` banao jo internal storage ke liye C++ ki `std::map` aur `std::set` use karein. Inke `.set()` aur `.get()` methods native functions se bind karo.
+
+
+
+### 9. Host APIs (Node.js APIs)
+
+* **Absolute Solution (C++ FFI / Bindings):** JS ko OS ke saath communicate karwao.
+* **Implementation:** Ek global `fs` object banao. Usme `fs.readFileSync` method add karo jo essentially C++ ka `std::ifstream` use karke file read kare aur JSString return kare. Aise hi tum custom Network requests ke liye `libcurl` ka C++ binding bana sakte ho.
+
+### 10. The Implicit `arguments` Object
+
+* **Absolute Solution (Environment Injection):** Function call ke waqt environment variables inject hote hain.
+* **Implementation:** `evaluator.cpp` ke `CallExpression` section mein, parameters bind karne ke baad ek naya `JSObject` banao jiska naam `arguments` ho. Is object mein pass kiye gaye saare raw args daal do (`args[0]`, `args[1]`). Fir `funcEnv->define("arguments", argumentsObject)` kar do. (Arrow functions ke liye ye skip karna hoga).
+
+### 11. `Object.prototype` Chain
+
+* **Absolute Solution (Global Root Prototype):** * **Implementation:** Engine startup (`setupGlobalEnvironment`) ke waqt ek global `ObjectPrototype` naam ka `JSObject` banao. Isme `hasOwnProperty` aur `toString` jaisi native functions bind karo. Jab bhi parser ek naya `ObjectLiteral` (`{}`) banaye, C++ mein us naye object ka `__proto__` pointer is global `ObjectPrototype` par set kar do.
+
+### 12. AST Traversal Performance Overhead (Dynamic Cast)
+
+* **Absolute Solution (The Visitor Pattern / Virtual Evaluation):** `std::dynamic_pointer_cast` V1 engine ki performance ko maar raha hai. Ise hatao.
+* **Implementation:** Har AST Node (`Expression`, `Statement`) mein ek virtual method add karo: `virtual std::shared_ptr<JSValue> eval(Evaluator* evaluator) = 0;`. Evaluator mein cast karne ke bajaye seedha `stmt->eval(this)` call karo. C++ ka "Virtual Table Dispatch" (vtable) dynamic casting se 10x zyada fast hota hai. Loop iterations mein speed boost massive hoga.
+
+### 13. Cascading Deletion Pauses (UI Freeze)
+
+* **Absolute Solution (Deferred Deletion Queue):** * **Implementation:** Jab C++ mein ek bohot bada array destroy ho raha ho, toh use turant delete mat karo. Ek global `std::vector<JSValue*> trashQueue` banao. Apne custom Deleter mein pointer ko yahan bhej do. `runEventLoop` mein idle time mein (`sleep` ke aaspas), trashQueue se per-tick 100-200 objects delete karke memory free karo. Isse "Lag Spikes" nahi aayenge.
+
+Agar tum in steps ko follow karte ho, toh tumhara V1 Interpreter C++ design standards par ekdum top-tier ho jayega aur custom modules ya JSON handling jaise complex tasks asani se run kar payega!

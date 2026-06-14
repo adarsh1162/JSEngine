@@ -64,6 +64,7 @@ public:
 
     // Helpers
     std::shared_ptr<JSValue> evaluate(std::shared_ptr<Expression> expr);
+    std::shared_ptr<JSValue> executeFunction(std::shared_ptr<JSValue> funcVal, std::shared_ptr<JSValue> thisContext, const std::vector<std::shared_ptr<JSValue>>& args);
     void execute(std::shared_ptr<Statement> stmt);
     void executeBlock(const std::vector<std::shared_ptr<Statement>>& statements, std::shared_ptr<Environment> env);
     void registerTDZ(const std::vector<std::shared_ptr<Statement>>& statements, std::shared_ptr<Environment> env);

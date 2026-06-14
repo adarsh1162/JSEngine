@@ -185,6 +185,23 @@ std::shared_ptr<JSValue> getArrayMethod(std::shared_ptr<JSArray> array, const st
             return std::shared_ptr<JSValue>(resArr);
         });
     }
+    if (methodName == "indexOf") {
+        return std::make_shared<JSNativeFunction>("indexOf", [array](const std::vector<std::shared_ptr<JSValue>>& args) {
+            if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(-1));
+            auto searchElement = args[0];
+            int fromIndex = 0;
+            if (args.size() > 1) {
+                fromIndex = args[1]->toNumber();
+                if (fromIndex < 0) fromIndex = std::max(0, (int)array->elements.size() + fromIndex);
+            }
+            for (size_t i = fromIndex; i < array->elements.size(); ++i) {
+                if (array->elements[i]->toString() == searchElement->toString() && array->elements[i]->getType() == searchElement->getType()) {
+                    return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(i));
+                }
+            }
+            return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(-1));
+        });
+    }
     return std::make_shared<JSUndefined>();
 }
 
@@ -266,11 +283,11 @@ std::shared_ptr<JSValue> getStringMethod(std::shared_ptr<JSString> str, const st
             auto regexObj = std::dynamic_pointer_cast<JSObject>(args[0]);
             if (!regexObj->properties.count("source")) return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
             
-            std::string pattern = regexObj->properties["source"]->toString();
+            std::string pattern = regexObj->properties["source"].value->toString();
             if (pattern.length() >= 2 && pattern.front() == '/' && pattern.back() == '/') {
                 pattern = pattern.substr(1, pattern.length() - 2);
             }
-            std::string flags = regexObj->properties.count("flags") ? regexObj->properties["flags"]->toString() : "";
+            std::string flags = regexObj->properties.count("flags") ? regexObj->properties["flags"].value->toString() : "";
             
             try {
                 std::regex_constants::syntax_option_type opt = std::regex_constants::ECMAScript;

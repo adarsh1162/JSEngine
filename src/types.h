@@ -83,9 +83,18 @@ public:
     bool isTruthy() const override { return true; }
 };
 
+struct JSPropertyDescriptor {
+    std::shared_ptr<JSValue> value;
+    std::shared_ptr<JSValue> get;
+    std::shared_ptr<JSValue> set;
+    bool writable = true;
+    bool enumerable = true;
+    bool configurable = true;
+};
+
 class JSObject : public JSValue {
 public:
-    std::unordered_map<std::string, std::shared_ptr<JSValue>> properties;
+    std::unordered_map<std::string, JSPropertyDescriptor> properties;
     std::shared_ptr<JSObject> prototype;
     JSValueType getType() const override { return JSValueType::OBJECT; }
     std::string toString() const override {
@@ -94,10 +103,16 @@ public:
         for (const auto& kv : properties) {
             if (!first) res += ", ";
             res += kv.first + ": ";
-            if (kv.second->getType() == JSValueType::STRING) {
-                res += "'" + kv.second->toString() + "'";
+            if (kv.second.get) {
+                res += "[Getter]";
+            } else if (kv.second.value) {
+                if (kv.second.value->getType() == JSValueType::STRING) {
+                    res += "'" + kv.second.value->toString() + "'";
+                } else {
+                    res += kv.second.value->toString();
+                }
             } else {
-                res += kv.second->toString();
+                res += "undefined";
             }
             first = false;
         }

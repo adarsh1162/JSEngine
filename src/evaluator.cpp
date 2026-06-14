@@ -4,6 +4,8 @@
 #include <chrono>
 #include <regex>
 #include <cstdint>
+#include "lexer.h"
+#include "parser.h"
 
 // --- Builtins ---
 std::shared_ptr<JSValue> builtin_console_log(const std::vector<std::shared_ptr<JSValue>>& args) {
@@ -61,7 +63,7 @@ Evaluator::Evaluator() {
 
 void Evaluator::setupGlobalEnvironment() {
     objectPrototype = std::make_shared<JSObject>();
-    objectPrototype->properties["hasOwnProperty"] = std::make_shared<JSNativeFunction>("hasOwnProperty", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
+    objectPrototype->properties["hasOwnProperty"].value = std::make_shared<JSNativeFunction>("hasOwnProperty", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
         if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(false));
         if (this->lastThisContext && this->lastThisContext->getType() == JSValueType::OBJECT) {
             auto obj = std::dynamic_pointer_cast<JSObject>(this->lastThisContext);
@@ -69,41 +71,170 @@ void Evaluator::setupGlobalEnvironment() {
         }
         return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(false));
     });
-    objectPrototype->properties["toString"] = std::make_shared<JSNativeFunction>("toString", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
+    objectPrototype->properties["toString"].value = std::make_shared<JSNativeFunction>("toString", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
         if (this->lastThisContext && this->lastThisContext->getType() == JSValueType::OBJECT) {
             return std::shared_ptr<JSValue>(std::make_shared<JSString>("[object Object]"));
         }
         return std::shared_ptr<JSValue>(std::make_shared<JSString>("undefined"));
     });
 
+    auto objectConstructor = std::make_shared<JSObject>();
+    objectConstructor->prototype = objectPrototype;
+    objectConstructor->properties["defineProperty"].value = std::make_shared<JSNativeFunction>("defineProperty", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.size() < 3) throw RuntimeError("TypeError: Object.defineProperty requires 3 arguments");
+        if (args[0]->getType() != JSValueType::OBJECT && args[0]->getType() != JSValueType::FUNCTION) throw RuntimeError("TypeError: Object.defineProperty called on non-object");
+        auto obj = std::dynamic_pointer_cast<JSObject>(args[0]);
+        std::string prop = args[1]->toString();
+        auto desc = args[2];
+        if (desc->getType() != JSValueType::OBJECT) throw RuntimeError("TypeError: Property description must be an object");
+        auto descObj = std::dynamic_pointer_cast<JSObject>(desc);
+        
+        JSPropertyDescriptor pd;
+        if (descObj->properties.count("value")) pd.value = descObj->properties["value"].value;
+        if (descObj->properties.count("get")) pd.get = descObj->properties["get"].value;
+        if (descObj->properties.count("set")) pd.set = descObj->properties["set"].value;
+        if (descObj->properties.count("writable")) pd.writable = descObj->properties["writable"].value->isTruthy();
+        if (descObj->properties.count("enumerable")) pd.enumerable = descObj->properties["enumerable"].value->isTruthy();
+        if (descObj->properties.count("configurable")) pd.configurable = descObj->properties["configurable"].value->isTruthy();
+        
+        obj->properties[prop] = pd;
+        return args[0];
+    });
+    environment->define("Object", objectConstructor);
+
+    auto jsonObj = std::make_shared<JSObject>();
+    jsonObj->prototype = objectPrototype;
+    jsonObj->properties["stringify"].value = std::make_shared<JSNativeFunction>("stringify", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+        
+        std::function<std::string(std::shared_ptr<JSValue>)> stringify = [&](std::shared_ptr<JSValue> val) -> std::string {
+            if (!val) return "null";
+            if (val->getType() == JSValueType::NULL_TYPE) return "null";
+            if (val->getType() == JSValueType::UNDEFINED) return "undefined";
+            if (val->getType() == JSValueType::BOOLEAN) return val->isTruthy() ? "true" : "false";
+            if (val->getType() == JSValueType::NUMBER) return val->toString();
+            if (val->getType() == JSValueType::STRING) return "\"" + val->toString() + "\""; // Need escaping in full impl
+            if (val->getType() == JSValueType::ARRAY) {
+                auto arr = std::dynamic_pointer_cast<JSArray>(val);
+                std::string res = "[";
+                for (size_t i = 0; i < arr->elements.size(); ++i) {
+                    if (i > 0) res += ",";
+                    res += stringify(arr->elements[i]);
+                }
+                res += "]";
+                return res;
+            }
+            if (val->getType() == JSValueType::OBJECT) {
+                auto obj = std::dynamic_pointer_cast<JSObject>(val);
+                std::string res = "{";
+                bool first = true;
+                for (const auto& kv : obj->properties) {
+                    if (kv.second.value) { // Ignore getters for simple stringify
+                        if (!first) res += ",";
+                        res += "\"" + kv.first + "\":" + stringify(kv.second.value);
+                        first = false;
+                    }
+                }
+                res += "}";
+                return res;
+            }
+            return "undefined";
+        };
+        
+        return std::shared_ptr<JSValue>(std::make_shared<JSString>(stringify(args[0])));
+    });
+
+    // Simple JSON.parse mock (For complex parsing we need to invoke the internal AST parser, but for now we throw since it's hard to eval JSON directly without a dedicated json parser).
+    jsonObj->properties["parse"].value = std::make_shared<JSNativeFunction>("parse", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
+        throw RuntimeError("Error: JSON.parse is not fully implemented in V1 engine natively");
+        return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+    });
+
+    environment->define("JSON", jsonObj);
+
+    // Inject Polyfills for Map, Set, Array.prototype.indexOf, etc.
+    std::string polyfillCode = R"(
+        class Map {
+            constructor() { this._keys = []; this._values = []; }
+            set(k, v) { 
+                let idx = this._keys.indexOf(k);
+                if (idx !== -1) this._values[idx] = v;
+                else { this._keys.push(k); this._values.push(v); }
+                return this;
+            }
+            get(k) {
+                let idx = this._keys.indexOf(k);
+                return idx !== -1 ? this._values[idx] : undefined;
+            }
+            has(k) { return this._keys.indexOf(k) !== -1; }
+            clear() { this._keys = []; this._values = []; }
+        }
+        Map.prototype["delete"] = function(k) {
+            let idx = this._keys.indexOf(k);
+            if (idx !== -1) { this._keys.splice(idx, 1); this._values.splice(idx, 1); return true; }
+            return false;
+        };
+        Object.defineProperty(Map.prototype, "size", { get: function() { return this._keys.length; } });
+        
+        class Set {
+            constructor() { this._values = []; }
+            add(v) { if (!this.has(v)) this._values.push(v); return this; }
+            has(v) { return this._values.indexOf(v) !== -1; }
+            clear() { this._values = []; }
+        }
+        Set.prototype["delete"] = function(v) {
+            let idx = this._values.indexOf(v);
+            if (idx !== -1) { this._values.splice(idx, 1); return true; }
+            return false;
+        };
+        Object.defineProperty(Set.prototype, "size", { get: function() { return this._values.length; } });
+    )";
+    try {
+        Lexer polyfillLexer(polyfillCode);
+        Parser polyfillParser(polyfillLexer.tokenize());
+        auto polyfillAst = polyfillParser.parse();
+        for (const auto& stmt : polyfillAst->body) {
+            hoist(stmt);
+        }
+        for (const auto& stmt : polyfillAst->body) {
+            execute(stmt);
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Polyfill Init Error: " << e.what() << "\n";
+    } catch (...) {
+        std::cerr << "Polyfill Init Error: Unknown\n";
+    }
+
+
+
     auto consoleObj = std::make_shared<JSObject>();
     consoleObj->prototype = objectPrototype;
-    consoleObj->properties["log"] = std::make_shared<JSNativeFunction>("log", builtin_console_log);
+    consoleObj->properties["log"].value = std::make_shared<JSNativeFunction>("log", builtin_console_log);
     environment->define("console", consoleObj);
 
     auto mathObj = std::make_shared<JSObject>();
     mathObj->prototype = objectPrototype;
-    mathObj->properties["floor"] = std::make_shared<JSNativeFunction>("floor", builtin_math_floor);
-    mathObj->properties["random"] = std::make_shared<JSNativeFunction>("random", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+    mathObj->properties["floor"].value = std::make_shared<JSNativeFunction>("floor", builtin_math_floor);
+    mathObj->properties["random"].value = std::make_shared<JSNativeFunction>("random", [](const std::vector<std::shared_ptr<JSValue>>& args) {
         return std::make_shared<JSNumber>((double)rand() / RAND_MAX);
     });
-    mathObj->properties["max"] = std::make_shared<JSNativeFunction>("max", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+    mathObj->properties["max"].value = std::make_shared<JSNativeFunction>("max", [](const std::vector<std::shared_ptr<JSValue>>& args) {
         if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(-INFINITY));
         double maxVal = args[0]->toNumber();
         for (const auto& a : args) maxVal = std::max(maxVal, a->toNumber());
         return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(maxVal));
     });
-    mathObj->properties["min"] = std::make_shared<JSNativeFunction>("min", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+    mathObj->properties["min"].value = std::make_shared<JSNativeFunction>("min", [](const std::vector<std::shared_ptr<JSValue>>& args) {
         if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(INFINITY));
         double minVal = args[0]->toNumber();
         for (const auto& a : args) minVal = std::min(minVal, a->toNumber());
         return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(minVal));
     });
-    mathObj->properties["pow"] = std::make_shared<JSNativeFunction>("pow", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+    mathObj->properties["pow"].value = std::make_shared<JSNativeFunction>("pow", [](const std::vector<std::shared_ptr<JSValue>>& args) {
         if (args.size() < 2) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(NAN));
         return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(std::pow(args[0]->toNumber(), args[1]->toNumber())));
     });
-    mathObj->properties["round"] = std::make_shared<JSNativeFunction>("round", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+    mathObj->properties["round"].value = std::make_shared<JSNativeFunction>("round", [](const std::vector<std::shared_ptr<JSValue>>& args) {
         if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(NAN));
         return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(std::round(args[0]->toNumber())));
     });
@@ -290,7 +421,7 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
                 for (size_t i = 0; i < destDecl->names.size(); ++i) {
                     std::string key = destDecl->names[i];
                     if (obj->properties.count(key)) {
-                        environment->define(key, obj->properties[key], destDecl->isConst);
+                        environment->define(key, obj->properties[key].value, destDecl->isConst);
                     } else {
                         environment->define(key, std::make_shared<JSUndefined>(), destDecl->isConst);
                     }
@@ -516,7 +647,55 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
         }
 
         try {
-            if (rightVal->getType() == JSValueType::ARRAY) {
+            std::shared_ptr<JSValue> iteratorFunc;
+            if (rightVal->getType() == JSValueType::OBJECT || rightVal->getType() == JSValueType::ARRAY) {
+                auto jsObj = std::dynamic_pointer_cast<JSObject>(rightVal);
+                auto currentObj = jsObj;
+                while (currentObj) {
+                    if (currentObj->properties.count("__iterator__")) {
+                        iteratorFunc = currentObj->properties["__iterator__"].value;
+                        break;
+                    }
+                    currentObj = std::dynamic_pointer_cast<JSObject>(currentObj->prototype);
+                }
+            }
+
+            if (iteratorFunc && (iteratorFunc->getType() == JSValueType::FUNCTION || iteratorFunc->getType() == JSValueType::NATIVE_FUNCTION)) {
+                auto iteratorObj = executeFunction(iteratorFunc, rightVal, {});
+                if (iteratorObj->getType() != JSValueType::OBJECT) throw RuntimeError("TypeError: Result of the Symbol.iterator method is not an object");
+                auto iter = std::dynamic_pointer_cast<JSObject>(iteratorObj);
+                
+                while (true) {
+                    std::shared_ptr<JSValue> nextFunc;
+                    auto currentIterObj = iter;
+                    while (currentIterObj) {
+                        if (currentIterObj->properties.count("next")) {
+                            nextFunc = currentIterObj->properties["next"].value;
+                            break;
+                        }
+                        currentIterObj = std::dynamic_pointer_cast<JSObject>(currentIterObj->prototype);
+                    }
+                    if (!nextFunc) throw RuntimeError("TypeError: iterator.next is not a function");
+                    
+                    auto resultObj = executeFunction(nextFunc, iter, {});
+                    if (resultObj->getType() != JSValueType::OBJECT) throw RuntimeError("TypeError: Iterator result is not an object");
+                    auto result = std::dynamic_pointer_cast<JSObject>(resultObj);
+                    
+                    bool done = false;
+                    if (result->properties.count("done")) done = result->properties["done"].value->isTruthy();
+                    if (done) break;
+                    
+                    auto val = std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+                    if (result->properties.count("value")) val = result->properties["value"].value;
+                    
+                    environment->define(varName, val);
+                    try {
+                        execute(forOfStmt->body);
+                    } catch (const BreakException&) { break; }
+                    catch (const ContinueException&) { continue; }
+                    catch (const ReturnException&) { throw; }
+                }
+            } else if (rightVal->getType() == JSValueType::ARRAY) {
                 auto arr = std::dynamic_pointer_cast<JSArray>(rightVal);
                 for (const auto& elem : arr->elements) {
                     environment->define(varName, elem);
@@ -579,11 +758,11 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
             if (method->name == "constructor") continue;
             auto decl = std::make_shared<FunctionDeclaration>(method->name, method->parameters, method->body);
             auto methodFunc = std::make_shared<JSFunction>(decl, environment);
-            prototype->properties[method->name] = methodFunc;
+            prototype->properties[method->name].value = methodFunc;
         }
         
         classConstructor->prototypeProperty = prototype;
-        prototype->properties["constructor"] = classConstructor;
+        prototype->properties["constructor"].value = classConstructor;
         environment->define(classDecl->name, classConstructor);
     }
     else if (auto returnStmt = std::dynamic_pointer_cast<ReturnStatement>(stmt)) {
@@ -629,6 +808,65 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
 }
 
 
+
+std::shared_ptr<JSValue> Evaluator::executeFunction(std::shared_ptr<JSValue> callee, std::shared_ptr<JSValue> thisContext, const std::vector<std::shared_ptr<JSValue>>& args) {
+    if (callee->getType() == JSValueType::NATIVE_FUNCTION) {
+        auto nativeFunc = std::dynamic_pointer_cast<JSNativeFunction>(callee);
+        auto previousThis = lastThisContext;
+        lastThisContext = thisContext;
+        auto ret = nativeFunc->func(args);
+        lastThisContext = previousThis;
+        return ret;
+    }
+    if (callee->getType() == JSValueType::FUNCTION) {
+        auto func = std::dynamic_pointer_cast<JSFunction>(callee);
+        auto funcEnv = std::make_shared<Environment>(func->closure);
+        
+        if (!func->isArrow) {
+            funcEnv->define("this", thisContext);
+            auto argsObj = std::make_shared<JSObject>();
+            argsObj->prototype = objectPrototype;
+            argsObj->properties["length"].value = std::make_shared<JSNumber>(args.size());
+            for (size_t i = 0; i < args.size(); ++i) {
+                argsObj->properties[std::to_string(i)].value = args[i];
+            }
+            funcEnv->define("arguments", argsObj);
+        } else {
+            // Arrow functions inherit 'this' from their closure environment automatically
+        }
+
+        size_t paramCount = func->declaration->parameters.size();
+        for (size_t i = 0; i < paramCount; ++i) {
+            auto paramName = func->declaration->parameters[i].first;
+            auto defaultExpr = func->declaration->parameters[i].second;
+
+            if (func->declaration->hasRest && i == paramCount - 1) {
+                auto restArr = std::make_shared<JSArray>();
+                for (size_t j = i; j < args.size(); ++j) restArr->elements.push_back(args[j]);
+                funcEnv->define(paramName, restArr);
+            } else if (i < args.size() && args[i]->getType() != JSValueType::UNDEFINED) {
+                funcEnv->define(paramName, args[i]);
+            } else if (defaultExpr) {
+                auto previousEnv = environment;
+                environment = funcEnv;
+                auto defVal = evaluate(defaultExpr);
+                environment = previousEnv;
+                funcEnv->define(paramName, defVal);
+            } else {
+                funcEnv->define(paramName, std::make_shared<JSUndefined>());
+            }
+        }
+        try {
+            for (const auto& s : func->declaration->body->statements) hoist(s);
+            executeBlock(func->declaration->body->statements, funcEnv);
+        } catch (const ReturnException& ret) {
+            return ret.value;
+        }
+        return std::make_shared<JSUndefined>();
+    }
+    throw RuntimeError("TypeError: callee is not a function");
+}
+
 std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
     if (auto num = std::dynamic_pointer_cast<NumberLiteral>(expr)) {
         return std::make_shared<JSNumber>(num->value);
@@ -670,7 +908,7 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
         auto obj = std::make_shared<JSObject>();
         obj->prototype = objectPrototype;
         for (const auto& prop : objLit->properties) {
-            obj->properties[prop.key] = evaluate(prop.value);
+            obj->properties[prop.key].value = evaluate(prop.value);
         }
         return obj;
     }
@@ -694,10 +932,10 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
     }
     if (auto regex = std::dynamic_pointer_cast<RegexLiteralExpression>(expr)) {
         auto obj = std::make_shared<JSObject>();
-        obj->properties["source"] = std::make_shared<JSString>(regex->pattern);
-        obj->properties["flags"] = std::make_shared<JSString>(regex->flags);
+        obj->properties["source"].value = std::make_shared<JSString>(regex->pattern);
+        obj->properties["flags"].value = std::make_shared<JSString>(regex->flags);
         
-        obj->properties["test"] = std::make_shared<JSNativeFunction>("test", [regex](const std::vector<std::shared_ptr<JSValue>>& args) {
+        obj->properties["test"].value = std::make_shared<JSNativeFunction>("test", [regex](const std::vector<std::shared_ptr<JSValue>>& args) {
             if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(false));
             std::string str = args[0]->toString();
             try {
@@ -770,8 +1008,13 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             
             std::shared_ptr<JSValue> current = std::make_shared<JSUndefined>();
             if (obj->getType() == JSValueType::OBJECT || obj->getType() == JSValueType::FUNCTION) {
-                auto jsObj = std::dynamic_pointer_cast<JSObject>(obj);
-                if (jsObj->properties.count(propName)) current = jsObj->properties[propName];
+                if (obj->getType() == JSValueType::FUNCTION && propName == "prototype") {
+                    auto funcObj = std::dynamic_pointer_cast<JSFunction>(obj);
+                    if (funcObj && funcObj->prototypeProperty) current = funcObj->prototypeProperty;
+                } else {
+                    auto jsObj = std::dynamic_pointer_cast<JSObject>(obj);
+                    if (jsObj && jsObj->properties.count(propName)) current = jsObj->properties[propName].value;
+                }
             } else if (obj->getType() == JSValueType::ARRAY) {
                 auto arr = std::dynamic_pointer_cast<JSArray>(obj);
                 if (propName == "length") {
@@ -798,8 +1041,34 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             }
             
             if (obj->getType() == JSValueType::OBJECT || obj->getType() == JSValueType::FUNCTION) {
+                if (obj->getType() == JSValueType::FUNCTION && propName == "prototype") {
+                    auto funcObj = std::dynamic_pointer_cast<JSFunction>(obj);
+                    if (funcObj) {
+                        funcObj->prototypeProperty = value;
+                        return value;
+                    }
+                }
                 auto jsObj = std::dynamic_pointer_cast<JSObject>(obj);
-                jsObj->properties[propName] = value;
+                if (!jsObj) throw RuntimeError("TypeError: Cannot set property on non-object");
+                // Search for setter in prototype chain
+                auto currentObj = jsObj;
+                bool setterFound = false;
+                while (currentObj) {
+                    if (currentObj->properties.count(propName)) {
+                        auto& desc = currentObj->properties[propName];
+                        if (desc.set) {
+                            executeFunction(desc.set, jsObj, {value});
+                            setterFound = true;
+                            break;
+                        }
+                        if (!desc.writable) throw RuntimeError("TypeError: Cannot assign to read only property '" + propName + "'");
+                        break; // Stop at first property found if no setter
+                    }
+                    currentObj = std::dynamic_pointer_cast<JSObject>(currentObj->prototype);
+                }
+                if (!setterFound) {
+                    jsObj->properties[propName].value = value;
+                }
             } else if (obj->getType() == JSValueType::ARRAY) {
                 auto arr = std::dynamic_pointer_cast<JSArray>(obj);
                 try {
@@ -835,7 +1104,19 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             }
             if (obj->getType() == JSValueType::OBJECT || obj->getType() == JSValueType::FUNCTION) {
                 targetObj = std::dynamic_pointer_cast<JSObject>(obj);
-                if (targetObj->properties.count(propName)) current = targetObj->properties[propName];
+                auto currentObj = targetObj;
+                while (currentObj) {
+                    if (currentObj->properties.count(propName)) {
+                        auto& desc = currentObj->properties[propName];
+                        if (desc.get) {
+                            current = executeFunction(desc.get, targetObj, {});
+                            break;
+                        }
+                        current = desc.value ? desc.value : std::make_shared<JSUndefined>();
+                        break;
+                    }
+                    currentObj = std::dynamic_pointer_cast<JSObject>(currentObj->prototype);
+                }
             } else if (obj->getType() == JSValueType::ARRAY) {
                 targetArr = std::dynamic_pointer_cast<JSArray>(obj);
                 try {
@@ -856,7 +1137,22 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
         if (!varName.empty()) {
             environment->assign(varName, newJsVal);
         } else if (targetObj) {
-            targetObj->properties[propName] = newJsVal;
+            auto currentObj = targetObj;
+            bool setterFound = false;
+            while (currentObj) {
+                if (currentObj->properties.count(propName)) {
+                    auto& desc = currentObj->properties[propName];
+                    if (desc.set) {
+                        executeFunction(desc.set, targetObj, {newJsVal});
+                        setterFound = true;
+                        break;
+                    }
+                    if (!desc.writable) throw RuntimeError("TypeError: Cannot assign to read only property '" + propName + "'");
+                    break;
+                }
+                currentObj = std::dynamic_pointer_cast<JSObject>(currentObj->prototype);
+            }
+            if (!setterFound) targetObj->properties[propName].value = newJsVal;
         } else if (targetArr && arrIdx >= 0) {
             while (arrIdx >= targetArr->elements.size()) targetArr->elements.push_back(std::make_shared<JSUndefined>());
             targetArr->elements[arrIdx] = newJsVal;
@@ -991,7 +1287,7 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             if (callee->getType() == JSValueType::OBJECT) {
                 auto parentProto = std::dynamic_pointer_cast<JSObject>(callee);
                 if (parentProto->properties.count("constructor")) {
-                    callee = parentProto->properties["constructor"];
+                    callee = parentProto->properties["constructor"].value;
                 } else {
                     throw RuntimeError("TypeError: Super constructor not found");
                 }
@@ -1016,65 +1312,16 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             }
         }
 
-        if (callee->getType() == JSValueType::NATIVE_FUNCTION) {
-            auto nativeFunc = std::dynamic_pointer_cast<JSNativeFunction>(callee);
-            return nativeFunc->func(args);
+        std::shared_ptr<JSValue> thisContext;
+        if (std::dynamic_pointer_cast<SuperExpression>(call->callee)) {
+            thisContext = environment->get("this");
+        } else if (auto memberExpr = std::dynamic_pointer_cast<MemberExpression>(call->callee)) {
+            thisContext = evaluate(memberExpr->object);
+        } else {
+            thisContext = std::make_shared<JSUndefined>();
         }
-        if (callee->getType() == JSValueType::FUNCTION) {
-            auto func = std::dynamic_pointer_cast<JSFunction>(callee);
-            
-            auto funcEnv = std::make_shared<Environment>(func->closure);
-            
-            if (std::dynamic_pointer_cast<SuperExpression>(call->callee)) {
-                funcEnv->define("this", environment->get("this"));
-            }
-            else if (!func->isArrow) {
-                if (auto memberExpr = std::dynamic_pointer_cast<MemberExpression>(call->callee)) {
-                    auto thisObj = evaluate(memberExpr->object);
-                    funcEnv->define("this", thisObj);
-                } else {
-                    funcEnv->define("this", std::make_shared<JSUndefined>());
-                }
 
-                auto argsObj = std::make_shared<JSObject>();
-                argsObj->prototype = objectPrototype;
-                argsObj->properties["length"] = std::make_shared<JSNumber>(args.size());
-                for (size_t i = 0; i < args.size(); ++i) {
-                    argsObj->properties[std::to_string(i)] = args[i];
-                }
-                funcEnv->define("arguments", argsObj);
-            }
-
-            size_t paramCount = func->declaration->parameters.size();
-            for (size_t i = 0; i < paramCount; ++i) {
-                auto paramName = func->declaration->parameters[i].first;
-                auto defaultExpr = func->declaration->parameters[i].second;
-
-                if (func->declaration->hasRest && i == paramCount - 1) {
-                    auto restArr = std::make_shared<JSArray>();
-                    for (size_t j = i; j < args.size(); ++j) restArr->elements.push_back(args[j]);
-                    funcEnv->define(paramName, restArr);
-                } else if (i < args.size() && args[i]->getType() != JSValueType::UNDEFINED) {
-                    funcEnv->define(paramName, args[i]);
-                } else if (defaultExpr) {
-                    auto previousEnv = environment;
-                    environment = funcEnv;
-                    auto defVal = evaluate(defaultExpr);
-                    environment = previousEnv;
-                    funcEnv->define(paramName, defVal);
-                } else {
-                    funcEnv->define(paramName, std::make_shared<JSUndefined>());
-                }
-            }
-            try {
-                for (const auto& s : func->declaration->body->statements) hoist(s);
-                executeBlock(func->declaration->body->statements, funcEnv);
-            } catch (const ReturnException& ret) {
-                return ret.value;
-            }
-            return std::make_shared<JSUndefined>();
-        }
-        throw RuntimeError("TypeError: callee is not a function");
+        return executeFunction(callee, thisContext, args);
     }
     if (auto member = std::dynamic_pointer_cast<MemberExpression>(expr)) {
         auto obj = evaluate(member->object);
@@ -1140,6 +1387,17 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             return std::make_shared<JSUndefined>();
         }
 
+        if (obj->getType() == JSValueType::FUNCTION) {
+            if (propName == "prototype") {
+                auto funcObj = std::dynamic_pointer_cast<JSFunction>(obj);
+                if (funcObj && funcObj->prototypeProperty) return funcObj->prototypeProperty;
+                return std::make_shared<JSUndefined>();
+            }
+            // Functions in V1 don't have prototype chain property lookup yet unless they inherit from JSObject properly.
+            // For now, only prototype property is supported.
+            return std::make_shared<JSUndefined>();
+        }
+        
         if (obj->getType() == JSValueType::OBJECT || obj->getType() == JSValueType::ARRAY) {
             auto jsObj = std::dynamic_pointer_cast<JSObject>(obj);
             
@@ -1147,7 +1405,11 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             auto currentObj = jsObj;
             while (currentObj) {
                 if (currentObj->properties.count(propName)) {
-                    return currentObj->properties[propName];
+                    auto& desc = currentObj->properties[propName];
+                    if (desc.get) {
+                        return executeFunction(desc.get, jsObj, {});
+                    }
+                    return desc.value ? desc.value : std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
                 }
                 currentObj = std::dynamic_pointer_cast<JSObject>(currentObj->prototype);
             }
@@ -1179,7 +1441,7 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
         if (auto id = std::dynamic_pointer_cast<Identifier>(newExpr->callee)) {
             if (id->name == "Date") {
                 auto dateObj = std::make_shared<JSObject>();
-                dateObj->properties["getTime"] = std::make_shared<JSNativeFunction>("getTime", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+                dateObj->properties["getTime"].value = std::make_shared<JSNativeFunction>("getTime", [](const std::vector<std::shared_ptr<JSValue>>& args) {
                     auto now = std::chrono::system_clock::now();
                     auto duration = now.time_since_epoch();
                     auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
