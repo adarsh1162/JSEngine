@@ -18,10 +18,31 @@ void printValue(Value value) {
             break;
         case ValueType::VAL_OBJ: {
             Obj* obj = AS_OBJ(value);
-            if (obj->type == ObjType::OBJ_STRING) {
-                std::cout << ((ObjString*)obj)->chars;
-            } else {
-                std::cout << "[Object]";
+            switch (obj->type) {
+                case ObjType::OBJ_STRING:
+                    std::cout << ((ObjString*)obj)->chars;
+                    break;
+                case ObjType::OBJ_FUNCTION:
+                    std::cout << "<fn " << ((ObjFunction*)obj)->name << ">";
+                    break;
+                case ObjType::OBJ_NATIVE:
+                    std::cout << "<native fn>";
+                    break;
+                case ObjType::OBJ_CLOSURE:
+                    std::cout << "<fn " << ((ObjClosure*)obj)->function->name << ">";
+                    break;
+                case ObjType::OBJ_UPVALUE:
+                    std::cout << "upvalue";
+                    break;
+                case ObjType::OBJ_CLASS:
+                    std::cout << "<class " << ((ObjClass*)obj)->name << ">";
+                    break;
+                case ObjType::OBJ_INSTANCE:
+                    std::cout << "<" << ((ObjInstance*)obj)->klass->name << " instance>";
+                    break;
+                case ObjType::OBJ_ARRAY:
+                    std::cout << "[Array]";
+                    break;
             }
             break;
         }
@@ -35,7 +56,20 @@ bool valuesEqual(Value a, Value b) {
         case ValueType::VAL_NIL:    return true;
         case ValueType::VAL_UNDEFINED: return true;
         case ValueType::VAL_NUMBER: return AS_NUMBER(a) == AS_NUMBER(b);
-        case ValueType::VAL_OBJ:    return AS_OBJ(a) == AS_OBJ(b);
+        case ValueType::VAL_OBJ: {
+            if (IS_STRING(a) && IS_STRING(b)) {
+                return AS_STRING(a)->chars == AS_STRING(b)->chars;
+            }
+            return AS_OBJ(a) == AS_OBJ(b);
+        }
         default:                    return false; // Unreachable
     }
+}
+
+bool isFalsey(Value value) {
+    if (IS_NIL(value) || IS_UNDEFINED(value)) return true;
+    if (IS_BOOL(value)) return !AS_BOOL(value);
+    if (IS_NUMBER(value)) return AS_NUMBER(value) == 0;
+    if (IS_STRING(value)) return AS_STRING(value)->chars.empty();
+    return false;
 }

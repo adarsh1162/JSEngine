@@ -53,3 +53,5 @@ inline Value OBJ_VAL(Obj* obj) {
 
 void printValue(Value value);
 bool valuesEqual(Value a, Value b);
+bool isFalsey(Value value);
+#define IS_FALSEY(value) isFalsey(value)

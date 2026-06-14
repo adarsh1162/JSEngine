@@ -5,8 +5,10 @@
 #include "parser.h"
 #include "evaluator.h"
 #include "vm.h"
+#include "compiler.h"
 
 VM vm; // Global VM instance for V2 compatibility
+bool useVM = false;
 
 void run(const std::string& source) {
     Lexer lexer(source);
@@ -20,29 +22,59 @@ void run(const std::string& source) {
         return;
     }
 
-    Evaluator evaluator;
-    try {
-        evaluator.interpret(program);
-    } catch (const std::exception& e) {
-        std::cerr << "Runtime Error: " << e.what() << "\n";
+    if (useVM) {
+        ObjInstance* consoleObj = allocateInstance(nullptr);
+        ObjNative* logNative = allocateNative([](int argCount, Value* args) {
+            for (int i = 0; i < argCount; i++) {
+                printValue(args[i]);
+                if (i < argCount - 1) std::cout << " ";
+            }
+            std::cout << std::endl;
+            return UNDEFINED_VAL();
+        }, "log");
+        consoleObj->fields["log"] = OBJ_VAL(logNative);
+        vm.globals["console"] = OBJ_VAL(consoleObj);
+
+        AstCompiler compiler;
+        ObjFunction* function = compiler.compile(program);
+        if (function) {
+            InterpretResult result = vm.interpret(function);
+        } else {
+            std::cerr << "Compile Error: Bytecode generation failed.\n";
+        }
+    } else {
+        Evaluator evaluator;
+        try {
+            evaluator.interpret(program);
+        } catch (const std::exception& e) {
+            std::cerr << "Runtime Error: " << e.what() << "\n";
+        }
     }
 }
 
 int main(int argc, char* argv[]) {
     std::string sourceCode;
+    std::string filePath;
 
-    if (argc > 1) {
-        // Read from file
-        std::ifstream file(argv[1]);
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--vm") {
+            useVM = true;
+        } else {
+            filePath = arg;
+        }
+    }
+
+    if (!filePath.empty()) {
+        std::ifstream file(filePath);
         if (!file.is_open()) {
-            std::cerr << "Error: Could not open file " << argv[1] << std::endl;
+            std::cerr << "Error: Could not open file " << filePath << std::endl;
             return 1;
         }
         std::stringstream buffer;
         buffer << file.rdbuf();
         sourceCode = buffer.str();
     } else {
-        // Read from stdin (for basic testing without file)
         std::cout << "Enter JavaScript code (Press Ctrl+D to finish on Linux/Mac, Ctrl+Z on Windows):" << std::endl;
         std::stringstream buffer;
         buffer << std::cin.rdbuf();
