@@ -55,6 +55,10 @@ public:
     const std::unordered_map<std::string, Variable>& getLocalValues() const {
         return values;
     }
+    
+    std::shared_ptr<Environment> getEnclosing() const {
+        return enclosing;
+    }
 };
 
 #endif // ENVIRONMENT_H

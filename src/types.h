@@ -10,9 +10,16 @@
 
 enum class JSValueType { NUMBER, STRING, BOOLEAN, NULL_TYPE, UNDEFINED, OBJECT, ARRAY, FUNCTION, NATIVE_FUNCTION };
 
+extern class JSValue* gc_head;
+
 class JSValue {
 public:
-    virtual ~JSValue() = default;
+    JSValue* gc_next = nullptr;
+    JSValue* gc_prev = nullptr;
+    bool gc_marked = false;
+    
+    JSValue();
+    virtual ~JSValue();
     virtual JSValueType getType() const = 0;
     virtual std::string toString() const = 0;
     virtual double toNumber() const = 0;

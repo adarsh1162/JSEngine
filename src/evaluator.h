@@ -3,6 +3,8 @@
 
 #include <memory>
 #include <vector>
+#include <queue>
+#include <functional>
 #include <iostream>
 #include "ast.h"
 #include "environment.h"
@@ -60,6 +62,11 @@ public:
     std::vector<TimerTask> timerQueue;
     std::unordered_set<int> cancelledTimers;
     int nextTimerId = 1;
+    
+    std::queue<std::function<void()>> microtaskQueue;
+    void runMicrotasks();
+    void enqueueMicrotask(std::function<void()> task) { microtaskQueue.push(task); }
+    
     void runEventLoop();
 
     // Helpers
@@ -69,6 +76,11 @@ public:
     void executeBlock(const std::vector<std::shared_ptr<Statement>>& statements, std::shared_ptr<Environment> env);
     void registerTDZ(const std::vector<std::shared_ptr<Statement>>& statements, std::shared_ptr<Environment> env);
     void hoist(std::shared_ptr<Statement> stmt);
+
+    // Garbage Collection
+    void mark(std::shared_ptr<JSValue> value, std::unordered_set<std::shared_ptr<Environment>>& visitedEnv);
+    void mark(std::shared_ptr<Environment> env, std::unordered_set<std::shared_ptr<Environment>>& visitedEnv);
+    void markAndSweep();
 
     // Builtins
     void setupGlobalEnvironment();

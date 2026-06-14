@@ -239,6 +239,73 @@ void Evaluator::setupGlobalEnvironment() {
             return false;
         };
         Object.defineProperty(Set.prototype, "size", { get: function() { return this._values.length; } });
+        
+        class Promise {
+            constructor(executor) {
+                this.state = "pending";
+                this.value = undefined;
+                this.onFulfilledCallbacks = [];
+                this.onRejectedCallbacks = [];
+                let self = this;
+                let resolve = function(value) {
+                    if (self.state === "pending") {
+                        self.state = "fulfilled";
+                        self.value = value;
+                        for (let i = 0; i < self.onFulfilledCallbacks.length; i++) {
+                            self.onFulfilledCallbacks[i](self.value);
+                        }
+                    }
+                };
+                let reject = function(reason) {
+                    if (self.state === "pending") {
+                        self.state = "rejected";
+                        self.value = reason;
+                        for (let i = 0; i < self.onRejectedCallbacks.length; i++) {
+                            self.onRejectedCallbacks[i](self.value);
+                        }
+                    }
+                };
+                try { executor(resolve, reject); } catch (e) { reject(e); }
+            }
+            then(onFulfilled, onRejected) {
+                let defaultOnFulfilled = function(v) { return v; };
+                let defaultOnRejected = function(e) { throw e; };
+                let actualOnFulfilled = typeof onFulfilled === "function" ? onFulfilled : defaultOnFulfilled;
+                let actualOnRejected = typeof onRejected === "function" ? onRejected : defaultOnRejected;
+                let self = this;
+                return new Promise(function(resolve, reject) {
+                    if (self.state === "fulfilled") {
+                        queueMicrotask(function() {
+                            try { resolve(actualOnFulfilled(self.value)); } catch (e) { reject(e); }
+                        });
+                    } else if (self.state === "rejected") {
+                        queueMicrotask(function() {
+                            try { resolve(actualOnRejected(self.value)); } catch (e) { reject(e); }
+                        });
+                    } else {
+                        self.onFulfilledCallbacks.push(function(value) {
+                            queueMicrotask(function() {
+                                try { resolve(actualOnFulfilled(value)); } catch (e) { reject(e); }
+                            });
+                        });
+                        self.onRejectedCallbacks.push(function(reason) {
+                            queueMicrotask(function() {
+                                try { resolve(actualOnRejected(reason)); } catch (e) { reject(e); }
+                            });
+                        });
+                    }
+                });
+            }
+        }
+        Promise.prototype["catch"] = function(onRejected) {
+            return this.then(null, onRejected);
+        };
+        Promise.prototype["finally"] = function(onFinally) {
+            return this.then(
+                function(v) { onFinally(); return v; },
+                function(e) { onFinally(); throw e; }
+            );
+        };
     )";
     try {
         Lexer polyfillLexer(polyfillCode);
@@ -338,10 +405,41 @@ void Evaluator::setupGlobalEnvironment() {
     });
     environment->define("clearTimeout", clearTimeout);
     environment->define("clearInterval", clearTimeout);
+
+    environment->define("queueMicrotask", std::make_shared<JSNativeFunction>("queueMicrotask", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty() || args[0]->getType() != JSValueType::FUNCTION) throw RuntimeError("TypeError: queueMicrotask requires a function argument");
+        auto func = std::dynamic_pointer_cast<JSFunction>(args[0]);
+        this->enqueueMicrotask([this, func]() {
+            try {
+                this->executeFunction(func, nullptr, {});
+            } catch (const JSException& e) {
+                std::cerr << "Uncaught (in promise) " << e.value->toString() << std::endl;
+            } catch (const RuntimeError& e) {
+                std::cerr << "Runtime Error (in promise): " << e.what() << std::endl;
+            } catch (...) {}
+        });
+        return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+    }));
+}
+
+void Evaluator::runMicrotasks() {
+    while (!microtaskQueue.empty()) {
+        auto task = microtaskQueue.front();
+        microtaskQueue.pop();
+        try {
+            task();
+        } catch (...) {
+            // Already caught inside task usually, but just in case
+        }
+    }
 }
 
 void Evaluator::runEventLoop() {
-    while (!timerQueue.empty()) {
+    runMicrotasks();
+    while (!timerQueue.empty() || !microtaskQueue.empty()) {
+        runMicrotasks();
+        if (timerQueue.empty()) break;
+        
         auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now()).time_since_epoch().count();
         bool executedAny = false;
         
@@ -378,6 +476,8 @@ void Evaluator::runEventLoop() {
                     task.triggerTimeMs = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now()).time_since_epoch().count() + task.intervalMs;
                     timerQueue.push_back(task);
                 }
+                
+                runMicrotasks(); // Process microtasks right after each macrotask
                 executedAny = true;
                 break; // Restart iteration since we modified the queue
             } else {
@@ -401,6 +501,7 @@ void Evaluator::interpret(std::shared_ptr<Program> program) {
             execute(stmt);
         }
         runEventLoop();
+        markAndSweep();
     } catch (const JSException& e) {
         std::cerr << "Uncaught Error: " << e.value->toString() << std::endl;
     } catch (const RuntimeError& e) {
@@ -1569,4 +1670,131 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
     }
     
     return std::make_shared<JSUndefined>();
+}
+
+extern JSValue* gc_head;
+
+void Evaluator::mark(std::shared_ptr<JSValue> value, std::unordered_set<std::shared_ptr<Environment>>& visitedEnv) {
+    if (!value || value->gc_marked) return;
+    value->gc_marked = true;
+    
+    if (value->getType() == JSValueType::OBJECT) {
+        auto obj = std::dynamic_pointer_cast<JSObject>(value);
+        if (obj) {
+            for (auto& pair : obj->properties) {
+                mark(pair.second.value, visitedEnv);
+                if (pair.second.get) mark(pair.second.get, visitedEnv);
+                if (pair.second.set) mark(pair.second.set, visitedEnv);
+            }
+        }
+    } else if (value->getType() == JSValueType::ARRAY) {
+        auto arr = std::dynamic_pointer_cast<JSArray>(value);
+        if (arr) {
+            for (auto& el : arr->elements) mark(el, visitedEnv);
+        }
+    } else if (value->getType() == JSValueType::FUNCTION) {
+        auto func = std::dynamic_pointer_cast<JSFunction>(value);
+        if (func) {
+            mark(func->closure, visitedEnv);
+            mark(func->prototypeProperty, visitedEnv);
+        }
+    }
+}
+
+void Evaluator::mark(std::shared_ptr<Environment> env, std::unordered_set<std::shared_ptr<Environment>>& visitedEnv) {
+    if (!env || visitedEnv.count(env)) return;
+    visitedEnv.insert(env);
+    
+    for (auto& pair : env->getLocalValues()) {
+        mark(pair.second.value, visitedEnv);
+    }
+    mark(env->getEnclosing(), visitedEnv);
+}
+
+void Evaluator::markAndSweep() {
+    // 1. Unmark all objects
+    JSValue* curr = gc_head;
+    while (curr) {
+        curr->gc_marked = false;
+        curr = curr->gc_next;
+    }
+    
+    // 2. Mark from root environment and timer tasks/microtasks
+    std::unordered_set<std::shared_ptr<Environment>> visitedEnv;
+    mark(environment, visitedEnv);
+    
+    for (auto& task : timerQueue) {
+        mark(task.callback, visitedEnv);
+        for (auto& arg : task.args) mark(arg, visitedEnv);
+    }
+    // Note: microtasks use std::function which might capture Environment, but it's hard to trace. 
+    // Usually microtasks are short-lived. We assume they keep things alive implicitly if we don't GC during microtasks.
+    
+    // 3. Sweep
+    class JSDummyMarker : public JSValue {
+    public:
+        JSValueType getType() const override { return JSValueType::NULL_TYPE; }
+        std::string toString() const override { return ""; }
+        double toNumber() const override { return 0; }
+        bool isTruthy() const override { return false; }
+    };
+    
+    JSDummyMarker marker;
+    // Remove marker from the list since it gets auto-inserted at head by JSValue()
+    if (marker.gc_prev) marker.gc_prev->gc_next = marker.gc_next;
+    else gc_head = marker.gc_next;
+    if (marker.gc_next) marker.gc_next->gc_prev = marker.gc_prev;
+    marker.gc_next = nullptr;
+    marker.gc_prev = nullptr;
+
+    curr = gc_head;
+    int sweptCount = 0;
+    std::vector<std::shared_ptr<JSValue>> dropped_values;
+    std::vector<std::shared_ptr<Environment>> dropped_envs;
+    while (curr) {
+        // Insert marker after curr
+        marker.gc_next = curr->gc_next;
+        marker.gc_prev = curr;
+        if (curr->gc_next) curr->gc_next->gc_prev = &marker;
+        curr->gc_next = &marker;
+        
+        if (!curr->gc_marked) {
+            if (curr->getType() == JSValueType::OBJECT) {
+                auto obj = (JSObject*)curr;
+                if (!obj->properties.empty()) { 
+                    for (auto& pair : obj->properties) {
+                        dropped_values.push_back(std::move(pair.second.value));
+                        if (pair.second.get) dropped_values.push_back(std::move(pair.second.get));
+                        if (pair.second.set) dropped_values.push_back(std::move(pair.second.set));
+                    }
+                    obj->properties.clear(); 
+                    sweptCount++; 
+                }
+            } else if (curr->getType() == JSValueType::ARRAY) {
+                auto arr = (JSArray*)curr;
+                if (!arr->elements.empty()) { 
+                    for (auto& el : arr->elements) dropped_values.push_back(std::move(el));
+                    arr->elements.clear(); 
+                    sweptCount++; 
+                }
+            } else if (curr->getType() == JSValueType::FUNCTION) {
+                auto func = (JSFunction*)curr;
+                if (func->closure || func->prototypeProperty) {
+                    dropped_envs.push_back(std::move(func->closure));
+                    dropped_values.push_back(std::move(func->prototypeProperty));
+                    func->closure.reset();
+                    func->prototypeProperty.reset();
+                    sweptCount++;
+                }
+            }
+        }
+        
+        // Advance curr to whatever is after the marker
+        curr = marker.gc_next;
+        
+        // Remove marker
+        if (marker.gc_prev) marker.gc_prev->gc_next = marker.gc_next;
+        else gc_head = marker.gc_next;
+        if (marker.gc_next) marker.gc_next->gc_prev = marker.gc_prev;
+    }
 }

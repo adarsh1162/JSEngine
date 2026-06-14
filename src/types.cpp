@@ -1,5 +1,19 @@
 #include "types.h"
 #include <sstream>
+JSValue* gc_head = nullptr;
+
+JSValue::JSValue() {
+    gc_next = gc_head;
+    if (gc_head) gc_head->gc_prev = this;
+    gc_head = this;
+}
+
+JSValue::~JSValue() {
+    if (gc_prev) gc_prev->gc_next = gc_next;
+    else gc_head = gc_next;
+    if (gc_next) gc_next->gc_prev = gc_prev;
+}
+
 
 std::string JSNumber::toString() const {
     // To handle JS number stringification cleanly (e.g. 7.0 -> "7")
