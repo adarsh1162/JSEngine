@@ -1,4 +1,5 @@
 #include "evaluator.h"
+#include <fstream>
 #include "builtins.h"
 #include <cmath>
 #include <chrono>
@@ -100,7 +101,57 @@ void Evaluator::setupGlobalEnvironment() {
         obj->properties[prop] = pd;
         return args[0];
     });
-    environment->define("Object", objectConstructor);
+    environment->define("Object", objectConstructor);    
+    // Add require
+    environment->define("require", std::make_shared<JSNativeFunction>("require", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty()) throw RuntimeError("TypeError: require expects 1 argument");
+        std::string filename = args[0]->toString();
+        
+        std::ifstream file(filename);
+        if (!file.is_open()) {
+            throw RuntimeError("Error: Cannot find module '" + filename + "'");
+        }
+        std::string code((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        
+        Lexer lexer(code);
+        auto tokens = lexer.tokenize();
+        Parser parser(tokens);
+        auto ast = parser.parse();
+        
+        auto moduleEnv = std::make_shared<Environment>(this->environment);
+        auto moduleObj = std::make_shared<JSObject>();
+        auto exportsObj = std::make_shared<JSObject>();
+        moduleObj->properties["exports"].value = exportsObj;
+        moduleEnv->define("module", moduleObj);
+        moduleEnv->define("exports", exportsObj);
+        
+        auto previousEnv = this->environment;
+        this->environment = moduleEnv;
+        try {
+            for (const auto& stmt : ast->body) hoist(stmt);
+            for (const auto& stmt : ast->body) execute(stmt);
+        } catch (...) {
+            this->environment = previousEnv;
+            throw;
+        }
+        this->environment = previousEnv;
+        
+        return moduleObj->properties["exports"].value;
+    }));
+
+    // Add fs
+    auto fsObj = std::make_shared<JSObject>();
+    fsObj->properties["readFileSync"] = JSPropertyDescriptor{std::make_shared<JSNativeFunction>("readFileSync", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty()) throw RuntimeError("TypeError: readFileSync expects at least 1 argument");
+        std::string filename = args[0]->toString();
+        std::ifstream file(filename);
+        if (!file.is_open()) {
+            throw RuntimeError("Error: ENOENT: no such file or directory, open '" + filename + "'");
+        }
+        std::string fileContent((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        return std::shared_ptr<JSValue>(std::make_shared<JSString>(fileContent));
+    }), nullptr, nullptr, true, true, true};
+    environment->define("fs", fsObj);
 
     auto jsonObj = std::make_shared<JSObject>();
     jsonObj->prototype = objectPrototype;
