@@ -43,17 +43,6 @@ Once compiled, you can run JavaScript files through the engine by passing the fi
 ./JSEngine.exe tests/test5.js
 ```
 
-### Advanced Hidden Tests
-These tests validate advanced engine features like closures, coercion tricks, rest operators, and higher-order callbacks:
-```bash
-./JSEngine.exe tests/hidden/hidden_test_1_recursion.js
-./JSEngine.exe tests/hidden/hidden_test_2_closure.js
-./JSEngine.exe tests/hidden/hidden_test_3_coercion.js
-./JSEngine.exe tests/hidden/hidden_test_4_array_callbacks.js
-./JSEngine.exe tests/hidden/hidden_test_5_spread_rest.js
-./JSEngine.exe tests/hidden/hidden_test_6_math_date.js
-```
-
 ## Interactive REPL Mode
 If you run `JSEngine.exe` without any file arguments, it will open an interactive prompt where you can type JavaScript code directly:
 ```bash
