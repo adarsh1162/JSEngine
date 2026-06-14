@@ -16,12 +16,18 @@ Instead of relying on pre-existing interpreters, JSEngine implements every phase
 - **Evaluation Engine**: Executes the AST while seamlessly managing memory, dynamic scopes, contexts, and closures.
 - **Event Loop**: Accurately mimics the NodeJS non-blocking concurrency model via separate Macro and Microtask queues.
 
+### 🏛️ The Dual-Engine Architecture (V1 vs V2)
+This project contains two completely distinct execution architectures:
+
+1. **V1 (Primary Engine - AST Evaluator)**: This is the heavily tested, highly robust main engine of this repository. It recursively evaluates the AST in real-time. It is built for 100% specification accuracy, deep closures, and comprehensive built-in APIs. **You should always use V1 as the primary engine.**
+2. **V2 (Experimental Bytecode Engine & VM)**: The V2 engine abandons the AST evaluator and instead introduces a **Bytecode Compiler and Virtual Machine (VM)**. The AST is compiled into low-level operational bytecode which is then executed via a blazing fast dispatch loop in the VM. **The purpose of V2** is extreme performance, optimizing execution speeds by eliminating the overhead of recursively traversing tree nodes during runtime.
+
 ---
 
-## ✨ Comprehensive Features
+## ✨ Comprehensive Features 
 
-### 🛠️ V1 (Core Engine Architecture)
-The initial architecture of JSEngine brings the essential mechanics of JavaScript to life:
+### 🛠️ V1 (Primary AST Engine)
+The V1 engine brings the essential mechanics of JavaScript to life. It has been extensively upgraded to solve profound language limitations:
 
 - **Core Data Types & Structures**: 
   - Full native support for `Number`, `String`, `Boolean`, `Null`, and `Undefined`.
@@ -48,29 +54,22 @@ The initial architecture of JSEngine brings the essential mechanics of JavaScrip
   - Promise microtask execution via `queueMicrotask`.
 - **Built-In APIs**:
   - `console.log`, `Math` object methods (`random`, `floor`, `abs`, etc).
+- **Advanced Upgrades**:
+  - **Garbage Collection**: Automated Mark-and-Sweep Memory Management.
+  - **Event-Driven Architecture**: Native `EventEmitter` polyfills for `.on` and `.emit`.
+  - **JSON**: Safe `JSON.stringify` with Circular Reference tracking/protection.
+  - **Stack Traces**: ExecutionStackGuard for precise stack logs.
+  - **String Prototypes**: Native C++ bridge for `indexOf`, `substring`, `includes`, `padStart`, etc.
+  - **ES6 Modern**: `...args` rest/spread, arrow functions, Temporal Dead Zones (`let`/`const`).
 
-### 🚀 V2 (Advanced System Upgrades)
-The V2 update massively bridges the gap between a basic interpreter and a production-ready JavaScript runtime by solving profound language limitations:
+### ⚡ V2 (Bytecode Compiler & VM)
+The V2 Experimental Engine takes a performance-first approach, dropping recursive AST execution in favor of a Stack-Based Virtual Machine:
 
-- **Advanced Memory Management (Garbage Collection)**: 
-  - Implements an automated, asynchronous **Mark-and-Sweep Garbage Collector**.
-  - Periodically triggers off the Event Loop to sweep unreachable objects, closures, and environments, completely eliminating memory leaks during intense workloads.
-- **Native Event-Driven Architecture**: 
-  - A fully integrated, NodeJS-style `EventEmitter` module natively polyfilled into the engine.
-  - Seamlessly handles `.on()` listeners and `.emit()` dispatches asynchronously without blocking the main execution thread.
-- **JSON Serialization & Protection**: 
-  - Deep `JSON.stringify` and `JSON.parse` implementations.
-  - **Circular Reference Protection**: A critical safeguard that automatically tracks visited pointers via `std::unordered_set` to safely throw `TypeError` instead of crashing via infinite recursion/stack overflow when serializing self-referencing objects.
-- **Detailed Error Stack Traces**: 
-  - An intelligent execution stack tracker (`ExecutionStackGuard`) logs the precise depth and hierarchy of function calls, rendering highly accurate runtime Stack Traces when an error is thrown.
-- **Native String & Array Prototype Extension**: 
-  - Perfected prototype chain fallback delegation bridging native C++ evaluation and JS.
-  - Comprehensive String API methods natively injected: `indexOf`, `substring`, `includes`, `startsWith`, `endsWith`, `concat`, `padStart`, `padEnd`.
-- **Modern ES6 Integration**: 
-  - **Rest & Spread Syntax**: Unpacking iterables (`...args`, `[...arr]`) perfectly handled via AST spread element parsing.
-  - **Arrow Functions**: `() => {}` with accurate `this` lexical binding overrides.
-  - **Temporal Dead Zone (TDZ)**: Lexical bindings for `let` and `const` variables ensuring strict block-scoped temporal dead zones.
-  - Deep Recursion Stack Limit protection seamlessly incorporated to prevent OS-level segmentation faults.
+- **Bytecode Compiler**: Walks the Abstract Syntax Tree exactly once and translates nodes into a dense sequence of Operation Codes (OpCodes).
+- **Virtual Machine (VM)**: A highly optimized, linear loop-based execution runtime.
+- **Stack-Based Architecture**: Eliminates heavy recursive function calls. Operands and results are pushed/popped from an extremely fast linear stack structure (Push, Pop, Add, Sub, Call, LoadVar, StoreVar).
+- **Extreme Performance**: Outperforms the AST engine in loop-heavy and CPU-intensive operations by removing memory-heavy tree traversals during execution.
+- **Lexical Environment Storage**: Flattens scopes and registers variables linearly, making scope resolutions O(1) in many cases compared to deep AST hash map lookups.
 
 ---
 
@@ -84,16 +83,22 @@ Because JSEngine is written in raw C++17, it is completely cross-platform and na
    ```bash
    pacman -S mingw-w64-ucrt-x86_64-gcc
    ```
-3. Compile and Run:
+3. Compile and Run the Engines:
    ```bash
    # Add the compiler to your PATH
    export PATH="/c/msys64/ucrt64/bin:$PATH"
    
-   # Compile the Engine
+   # ========================================
+   # Run V1 (Primary AST Engine) - RECOMMENDED
+   # ========================================
    g++ -std=c++17 src/*.cpp -o JSEngine.exe
-   
-   # Run a JS file
    ./JSEngine.exe tests/advanced_upgrades.js
+   
+   # ========================================
+   # Run V2 (Bytecode Engine / VM)
+   # ========================================
+   g++ -std=c++17 compiler.cpp vm.o -o JSEngineV2.exe
+   ./JSEngineV2.exe tests/advanced_upgrades.js
    ```
 
 ### 🐧 Linux (Ubuntu / Debian)
@@ -104,8 +109,17 @@ Because JSEngine is written in raw C++17, it is completely cross-platform and na
    ```
 2. Compile and Run:
    ```bash
+   # ========================================
+   # Run V1 (Primary AST Engine) - RECOMMENDED
+   # ========================================
    g++ -std=c++17 src/*.cpp -o JSEngine
    ./JSEngine tests/advanced_upgrades.js
+
+   # ========================================
+   # Run V2 (Bytecode Engine / VM)
+   # ========================================
+   g++ -std=c++17 compiler.cpp vm.o -o JSEngineV2
+   ./JSEngineV2 tests/advanced_upgrades.js
    ```
 
 ### 🍎 macOS
@@ -115,8 +129,17 @@ Because JSEngine is written in raw C++17, it is completely cross-platform and na
    ```
 2. Compile and Run:
    ```bash
+   # ========================================
+   # Run V1 (Primary AST Engine) - RECOMMENDED
+   # ========================================
    g++ -std=c++17 src/*.cpp -o JSEngine
    ./JSEngine tests/advanced_upgrades.js
+
+   # ========================================
+   # Run V2 (Bytecode Engine / VM)
+   # ========================================
+   g++ -std=c++17 compiler.cpp vm.o -o JSEngineV2
+   ./JSEngineV2 tests/advanced_upgrades.js
    ```
 
 ---
@@ -126,14 +149,16 @@ Because JSEngine is written in raw C++17, it is completely cross-platform and na
 ```text
 JSEngine/
 ├── src/
-│   ├── main.cpp         # CLI Entry Point
+│   ├── main.cpp         # CLI Entry Point (V1)
 │   ├── lexer.cpp        # Lexical Tokenizer
 │   ├── parser.cpp       # AST Construction
 │   ├── evaluator.cpp    # AST Execution & Event Loop
 │   ├── builtins.cpp     # Native APIs (console, Math)
 │   └── gc.h             # Mark-and-Sweep Garbage Collector
+├── compiler.o           # V2 Bytecode Compiler Logic
+├── vm.o                 # V2 Virtual Machine Logic
 ├── tests/
-│   ├── advanced_upgrades.js  # V2 Integration & Stress Tests
+│   ├── advanced_upgrades.js  # V1 Integration & Stress Tests
 │   └── test_1.js             # V1 Core Mechanic Tests
 └── README.md
 ```
