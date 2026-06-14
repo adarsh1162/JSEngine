@@ -57,10 +57,11 @@ public:
 class AssignmentExpression : public Expression {
 public:
     std::string name;
+    TokenType op;
     std::shared_ptr<Expression> value;
 
-    AssignmentExpression(const std::string& n, std::shared_ptr<Expression> v)
-        : name(n), value(v) {}
+    AssignmentExpression(const std::string& n, std::shared_ptr<Expression> v, TokenType o = TokenType::ASSIGN)
+        : name(n), op(o), value(v) {}
 };
 
 class CallExpression : public Expression {
@@ -70,6 +71,23 @@ public:
 
     CallExpression(std::shared_ptr<Expression> c, const std::vector<std::shared_ptr<Expression>>& args)
         : callee(c), arguments(args) {}
+};
+
+class NewExpression : public Expression {
+public:
+    std::shared_ptr<Expression> callee;
+    std::vector<std::shared_ptr<Expression>> arguments;
+
+    NewExpression(std::shared_ptr<Expression> c, const std::vector<std::shared_ptr<Expression>>& args)
+        : callee(c), arguments(args) {}
+};
+
+class UnaryExpression : public Expression {
+public:
+    TokenType op;
+    std::shared_ptr<Expression> argument;
+
+    UnaryExpression(TokenType o, std::shared_ptr<Expression> arg) : op(o), argument(arg) {}
 };
 
 class MemberExpression : public Expression {
@@ -94,18 +112,20 @@ public:
     std::string name; // Can be empty for anonymous functions
     std::vector<std::string> parameters;
     std::shared_ptr<BlockStatement> body;
+    bool hasRest;
 
-    FunctionExpression(const std::string& n, const std::vector<std::string>& params, std::shared_ptr<BlockStatement> b)
-        : name(n), parameters(params), body(b) {}
+    FunctionExpression(const std::string& n, const std::vector<std::string>& params, std::shared_ptr<BlockStatement> b, bool hr = false)
+        : name(n), parameters(params), body(b), hasRest(hr) {}
 };
 
 class ArrowFunctionExpression : public Expression {
 public:
     std::vector<std::string> parameters;
     std::shared_ptr<BlockStatement> body;
+    bool hasRest;
 
-    ArrowFunctionExpression(const std::vector<std::string>& params, std::shared_ptr<BlockStatement> b)
-        : parameters(params), body(b) {}
+    ArrowFunctionExpression(const std::vector<std::string>& params, std::shared_ptr<BlockStatement> b, bool hr = false)
+        : parameters(params), body(b), hasRest(hr) {}
 };
 
 class SpreadElement : public Expression {
@@ -184,9 +204,10 @@ public:
     std::string name;
     std::vector<std::string> parameters;
     std::shared_ptr<BlockStatement> body;
+    bool hasRest;
 
-    FunctionDeclaration(const std::string& n, const std::vector<std::string>& params, std::shared_ptr<BlockStatement> b)
-        : name(n), parameters(params), body(b) {}
+    FunctionDeclaration(const std::string& n, const std::vector<std::string>& params, std::shared_ptr<BlockStatement> b, bool hr = false)
+        : name(n), parameters(params), body(b), hasRest(hr) {}
 };
 
 class ReturnStatement : public Statement {

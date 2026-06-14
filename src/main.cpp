@@ -4,6 +4,29 @@
 #include "lexer.h"
 #include "parser.h"
 #include "evaluator.h"
+#include "vm.h"
+
+VM vm; // Global VM instance for V2 compatibility
+
+void run(const std::string& source) {
+    Lexer lexer(source);
+    auto tokens = lexer.tokenize();
+
+    Parser parser(tokens);
+    auto program = parser.parse();
+
+    if (!program) {
+        std::cerr << "Syntax Error: Parsing failed.\n";
+        return;
+    }
+
+    Evaluator evaluator;
+    try {
+        evaluator.interpret(program);
+    } catch (const std::exception& e) {
+        std::cerr << "Runtime Error: " << e.what() << "\n";
+    }
+}
 
 int main(int argc, char* argv[]) {
     std::string sourceCode;
@@ -26,23 +49,7 @@ int main(int argc, char* argv[]) {
         sourceCode = buffer.str();
     }
 
-    // Initialize Lexer
-    Lexer lexer(sourceCode);
-    std::vector<Token> tokens = lexer.tokenize();
-
-    // Parse into AST
-    Parser parser(tokens);
-    std::shared_ptr<Program> ast;
-    try {
-        ast = parser.parse();
-    } catch (const std::exception& e) {
-        std::cerr << "Parser error: " << e.what() << std::endl;
-        return 1;
-    }
-
-    // Evaluate AST
-    Evaluator evaluator;
-    evaluator.interpret(ast);
+    run(sourceCode);
 
     return 0;
 }

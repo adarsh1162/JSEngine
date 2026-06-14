@@ -94,8 +94,14 @@ std::shared_ptr<Statement> Parser::functionDeclaration() {
     consume(TokenType::LPAREN, "Expect '(' after function name");
     
     std::vector<std::string> parameters;
+    bool hasRest = false;
     if (!check(TokenType::RPAREN)) {
         do {
+            if (match({TokenType::SPREAD})) {
+                parameters.push_back(consume(TokenType::IDENTIFIER, "Expect rest parameter name").value);
+                hasRest = true;
+                break;
+            }
             parameters.push_back(consume(TokenType::IDENTIFIER, "Expect parameter name").value);
         } while (match({TokenType::COMMA}));
     }
@@ -103,7 +109,7 @@ std::shared_ptr<Statement> Parser::functionDeclaration() {
     
     consume(TokenType::LBRACE, "Expect '{' before function body");
     auto body = block();
-    return std::make_shared<FunctionDeclaration>(name.value, parameters, body);
+    return std::make_shared<FunctionDeclaration>(name.value, parameters, body, hasRest);
 }
 
 std::shared_ptr<Statement> Parser::statement() {
@@ -199,12 +205,12 @@ std::shared_ptr<Expression> Parser::expression() {
 std::shared_ptr<Expression> Parser::assignment() {
     auto expr = logicalOr();
 
-    if (match({TokenType::ASSIGN})) {
+    if (match({TokenType::ASSIGN, TokenType::PLUS_ASSIGN, TokenType::MINUS_ASSIGN, TokenType::MULTIPLY_ASSIGN, TokenType::DIVIDE_ASSIGN})) {
         Token equals = previous();
         auto value = assignment();
 
         if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
-            return std::make_shared<AssignmentExpression>(id->name, value);
+            return std::make_shared<AssignmentExpression>(id->name, value, equals.type);
         }
         
         throw ParseError("Invalid assignment target");
@@ -284,18 +290,10 @@ std::shared_ptr<Expression> Parser::power() {
 }
 
 std::shared_ptr<Expression> Parser::unary() {
-    if (match({TokenType::LOGICAL_NOT, TokenType::MINUS})) {
-        // Technically UnaryExpression, but we can reuse BinaryExpression with a null left or create a UnaryExpression node.
-        // Let's create a Unary node, wait, ast.h doesn't have it. We can treat unary minus as 0 - expr for simplicity,
-        // but it's better to add UnaryExpression to AST. For now, since ast.h doesn't have UnaryExpression,
-        // let's use a dummy left node (0) for MINUS. For NOT, we can do (false == expr).
+    if (match({TokenType::LOGICAL_NOT, TokenType::MINUS, TokenType::TYPEOF})) {
         Token op = previous();
         auto right = unary();
-        if (op.type == TokenType::MINUS) {
-            return std::make_shared<BinaryExpression>(std::make_shared<NumberLiteral>(0), TokenType::MINUS, right);
-        } else {
-            return std::make_shared<BinaryExpression>(std::make_shared<BooleanLiteral>(false), TokenType::STRICT_EQUAL, right); // !x is roughly x === false
-        }
+        return std::make_shared<UnaryExpression>(op.type, right);
     }
     return call();
 }
@@ -332,8 +330,14 @@ std::shared_ptr<Expression> Parser::functionExpression() {
     consume(TokenType::LPAREN, "Expect '(' after function");
     
     std::vector<std::string> parameters;
+    bool hasRest = false;
     if (!check(TokenType::RPAREN)) {
         do {
+            if (match({TokenType::SPREAD})) {
+                parameters.push_back(consume(TokenType::IDENTIFIER, "Expect rest parameter name").value);
+                hasRest = true;
+                break;
+            }
             parameters.push_back(consume(TokenType::IDENTIFIER, "Expect parameter name").value);
         } while (match({TokenType::COMMA}));
     }
@@ -341,15 +345,21 @@ std::shared_ptr<Expression> Parser::functionExpression() {
     
     consume(TokenType::LBRACE, "Expect '{' before function body");
     auto body = block();
-    return std::make_shared<FunctionExpression>(name, parameters, body);
+    return std::make_shared<FunctionExpression>(name, parameters, body, hasRest);
 }
 
 std::shared_ptr<Expression> Parser::arrowFunction(bool hasParens) {
     std::vector<std::string> parameters;
+    bool hasRest = false;
     
     if (hasParens) {
         if (!check(TokenType::RPAREN)) {
             do {
+                if (match({TokenType::SPREAD})) {
+                    parameters.push_back(consume(TokenType::IDENTIFIER, "Expect rest parameter name").value);
+                    hasRest = true;
+                    break;
+                }
                 parameters.push_back(consume(TokenType::IDENTIFIER, "Expect parameter name").value);
             } while (match({TokenType::COMMA}));
         }
@@ -372,7 +382,7 @@ std::shared_ptr<Expression> Parser::arrowFunction(bool hasParens) {
         body = std::make_shared<BlockStatement>(stmts);
     }
     
-    return std::make_shared<ArrowFunctionExpression>(parameters, body);
+    return std::make_shared<ArrowFunctionExpression>(parameters, body, hasRest);
 }
 
 std::shared_ptr<Expression> Parser::primary() {
@@ -382,6 +392,16 @@ std::shared_ptr<Expression> Parser::primary() {
         return arrowFunction(hasParens);
     }
     
+    if (match({TokenType::NEW})) {
+        auto expr = call();
+        if (auto callExpr = std::dynamic_pointer_cast<CallExpression>(expr)) {
+            return std::make_shared<NewExpression>(callExpr->callee, callExpr->arguments);
+        } else if (auto idExpr = std::dynamic_pointer_cast<Identifier>(expr)) {
+            return std::make_shared<NewExpression>(idExpr, std::vector<std::shared_ptr<Expression>>());
+        }
+        throw ParseError("Expect constructor call after 'new'");
+    }
+
     if (match({TokenType::FUNCTION})) {
         return functionExpression();
     }

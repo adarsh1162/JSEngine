@@ -138,6 +138,8 @@ Token Lexer::readIdentifierOrKeyword() {
     else if (result == "false") type = TokenType::BOOLEAN_FALSE;
     else if (result == "null") type = TokenType::NULL_LIT;
     else if (result == "undefined") type = TokenType::UNDEFINED;
+    else if (result == "typeof") type = TokenType::TYPEOF;
+    else if (result == "new") type = TokenType::NEW;
 
     return Token(type, result, line, startCol);
 }
@@ -230,6 +232,10 @@ Token Lexer::nextToken() {
                 advance(); advance();
                 return Token(TokenType::POWER, "**", line, startCol);
             }
+            if (peek() == '=') {
+                advance(); advance();
+                return Token(TokenType::MULTIPLY_ASSIGN, "*=", line, startCol);
+            }
             advance();
             return Token(TokenType::MULTIPLY, "*", line, startCol);
         }
@@ -247,13 +253,19 @@ Token Lexer::nextToken() {
             return Token(TokenType::DOT, ".", line, startCol);
         }
 
-        // Single Character Tokens
+        // Single Character Tokens and Compound Assignments
         char c = currentChar;
         advance();
         switch (c) {
-            case '+': return Token(TokenType::PLUS, "+", line, startCol);
-            case '-': return Token(TokenType::MINUS, "-", line, startCol);
-            case '/': return Token(TokenType::DIVIDE, "/", line, startCol);
+            case '+': 
+                if (currentChar == '=') { advance(); return Token(TokenType::PLUS_ASSIGN, "+=", line, startCol); }
+                return Token(TokenType::PLUS, "+", line, startCol);
+            case '-': 
+                if (currentChar == '=') { advance(); return Token(TokenType::MINUS_ASSIGN, "-=", line, startCol); }
+                return Token(TokenType::MINUS, "-", line, startCol);
+            case '/': 
+                if (currentChar == '=') { advance(); return Token(TokenType::DIVIDE_ASSIGN, "/=", line, startCol); }
+                return Token(TokenType::DIVIDE, "/", line, startCol);
             case '%': return Token(TokenType::MODULO, "%", line, startCol);
             case '(': return Token(TokenType::LPAREN, "(", line, startCol);
             case ')': return Token(TokenType::RPAREN, ")", line, startCol);
@@ -301,6 +313,8 @@ std::string tokenTypeToString(TokenType type) {
         case TokenType::BOOLEAN_FALSE: return "BOOLEAN_FALSE";
         case TokenType::NULL_LIT: return "NULL_LIT";
         case TokenType::UNDEFINED: return "UNDEFINED";
+        case TokenType::TYPEOF: return "TYPEOF";
+        case TokenType::NEW: return "NEW";
         case TokenType::IDENTIFIER: return "IDENTIFIER";
         case TokenType::PLUS: return "PLUS";
         case TokenType::MINUS: return "MINUS";
@@ -308,6 +322,10 @@ std::string tokenTypeToString(TokenType type) {
         case TokenType::DIVIDE: return "DIVIDE";
         case TokenType::MODULO: return "MODULO";
         case TokenType::ASSIGN: return "ASSIGN";
+        case TokenType::PLUS_ASSIGN: return "PLUS_ASSIGN";
+        case TokenType::MINUS_ASSIGN: return "MINUS_ASSIGN";
+        case TokenType::MULTIPLY_ASSIGN: return "MULTIPLY_ASSIGN";
+        case TokenType::DIVIDE_ASSIGN: return "DIVIDE_ASSIGN";
         case TokenType::EQUAL: return "EQUAL";
         case TokenType::STRICT_EQUAL: return "STRICT_EQUAL";
         case TokenType::NOT_EQUAL: return "NOT_EQUAL";

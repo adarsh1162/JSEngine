@@ -1,7 +1,85 @@
 #include "builtins.h"
 #include <algorithm>
 
-std::shared_ptr<JSValue> getArrayMethod(std::shared_ptr<JSArray> array, const std::string& methodName) {
+std::shared_ptr<JSValue> getArrayMethod(std::shared_ptr<JSArray> array, const std::string& methodName, std::function<std::shared_ptr<JSValue>(std::shared_ptr<JSFunction>, const std::vector<std::shared_ptr<JSValue>>&)> invokeFunc) {
+    if (methodName == "filter") {
+        return std::make_shared<JSNativeFunction>("filter", [array, invokeFunc](const std::vector<std::shared_ptr<JSValue>>& args) {
+            if (args.empty() || args[0]->getType() != JSValueType::FUNCTION || !invokeFunc) return std::shared_ptr<JSValue>(std::make_shared<JSArray>());
+            auto callback = std::dynamic_pointer_cast<JSFunction>(args[0]);
+            auto resultArr = std::make_shared<JSArray>();
+            for (size_t i = 0; i < array->elements.size(); ++i) {
+                auto res = invokeFunc(callback, {array->elements[i], std::make_shared<JSNumber>(i), array});
+                if (res && res->isTruthy()) resultArr->elements.push_back(array->elements[i]);
+            }
+            return std::shared_ptr<JSValue>(resultArr);
+        });
+    }
+    if (methodName == "map") {
+        return std::make_shared<JSNativeFunction>("map", [array, invokeFunc](const std::vector<std::shared_ptr<JSValue>>& args) {
+            if (args.empty() || args[0]->getType() != JSValueType::FUNCTION || !invokeFunc) return std::shared_ptr<JSValue>(std::make_shared<JSArray>());
+            auto callback = std::dynamic_pointer_cast<JSFunction>(args[0]);
+            auto resultArr = std::make_shared<JSArray>();
+            for (size_t i = 0; i < array->elements.size(); ++i) {
+                auto res = invokeFunc(callback, {array->elements[i], std::make_shared<JSNumber>(i), array});
+                resultArr->elements.push_back(res ? res : std::make_shared<JSUndefined>());
+            }
+            return std::shared_ptr<JSValue>(resultArr);
+        });
+    }
+    if (methodName == "reduce") {
+        return std::make_shared<JSNativeFunction>("reduce", [array, invokeFunc](const std::vector<std::shared_ptr<JSValue>>& args) {
+            if (args.empty() || args[0]->getType() != JSValueType::FUNCTION || !invokeFunc) return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+            auto callback = std::dynamic_pointer_cast<JSFunction>(args[0]);
+            size_t startIndex = 0;
+            std::shared_ptr<JSValue> acc;
+            if (args.size() > 1) {
+                acc = args[1];
+            } else if (!array->elements.empty()) {
+                acc = array->elements[0];
+                startIndex = 1;
+            } else {
+                return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+            }
+            for (size_t i = startIndex; i < array->elements.size(); ++i) {
+                acc = invokeFunc(callback, {acc, array->elements[i], std::make_shared<JSNumber>(i), array});
+                if (!acc) acc = std::make_shared<JSUndefined>();
+            }
+            return acc;
+        });
+    }
+    if (methodName == "find") {
+        return std::make_shared<JSNativeFunction>("find", [array, invokeFunc](const std::vector<std::shared_ptr<JSValue>>& args) {
+            if (args.empty() || args[0]->getType() != JSValueType::FUNCTION || !invokeFunc) return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+            auto callback = std::dynamic_pointer_cast<JSFunction>(args[0]);
+            for (size_t i = 0; i < array->elements.size(); ++i) {
+                auto res = invokeFunc(callback, {array->elements[i], std::make_shared<JSNumber>(i), array});
+                if (res && res->isTruthy()) return array->elements[i];
+            }
+            return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+        });
+    }
+    if (methodName == "some") {
+        return std::make_shared<JSNativeFunction>("some", [array, invokeFunc](const std::vector<std::shared_ptr<JSValue>>& args) {
+            if (args.empty() || args[0]->getType() != JSValueType::FUNCTION || !invokeFunc) return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(false));
+            auto callback = std::dynamic_pointer_cast<JSFunction>(args[0]);
+            for (size_t i = 0; i < array->elements.size(); ++i) {
+                auto res = invokeFunc(callback, {array->elements[i], std::make_shared<JSNumber>(i), array});
+                if (res && res->isTruthy()) return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(true));
+            }
+            return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(false));
+        });
+    }
+    if (methodName == "every") {
+        return std::make_shared<JSNativeFunction>("every", [array, invokeFunc](const std::vector<std::shared_ptr<JSValue>>& args) {
+            if (args.empty() || args[0]->getType() != JSValueType::FUNCTION || !invokeFunc) return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(true));
+            auto callback = std::dynamic_pointer_cast<JSFunction>(args[0]);
+            for (size_t i = 0; i < array->elements.size(); ++i) {
+                auto res = invokeFunc(callback, {array->elements[i], std::make_shared<JSNumber>(i), array});
+                if (!res || !res->isTruthy()) return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(false));
+            }
+            return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(true));
+        });
+    }
     if (methodName == "push") {
         return std::make_shared<JSNativeFunction>("push", [array](const std::vector<std::shared_ptr<JSValue>>& args) {
             for (const auto& arg : args) {
