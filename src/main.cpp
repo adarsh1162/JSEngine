@@ -33,7 +33,15 @@ void run(const std::string& source) {
             return UNDEFINED_VAL();
         }, "log");
         consoleObj->fields["log"] = OBJ_VAL(logNative);
+        ObjNative* queueNative = allocateNative([](int argCount, Value* args) {
+            if (argCount >= 1) {
+                vm.enqueueMicrotask(args[0], UNDEFINED_VAL());
+            }
+            return UNDEFINED_VAL();
+        }, "queueMicrotask");
+
         vm.globals["console"] = OBJ_VAL(consoleObj);
+        vm.globals["queueMicrotask"] = OBJ_VAL(queueNative);
 
         AstCompiler compiler;
         ObjFunction* function = compiler.compile(program);

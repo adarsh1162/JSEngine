@@ -4,6 +4,7 @@
 #include "gc.h"
 #include <unordered_map>
 #include <string>
+#include <queue>
 
 #define FRAMES_MAX 64
 #define STACK_MAX (FRAMES_MAX * 256)
@@ -45,4 +46,9 @@ public:
 
     InterpretResult interpret(ObjFunction* function);
     InterpretResult run();
+    void runtimeError(const std::string& message);
+    
+    std::queue<std::pair<Value, Value>> microtasks;
+    void enqueueMicrotask(Value callback, Value arg);
+    void drainMicrotasks();
 };

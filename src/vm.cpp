@@ -104,7 +104,47 @@ InterpretResult VM::interpret(ObjFunction* function) {
     ObjClosure* closure = allocateClosure(function);
     push(OBJ_VAL(closure));
     call(closure, 0);
-    return run();
+    InterpretResult result = run();
+    if (result == InterpretResult::INTERPRET_OK) {
+        drainMicrotasks();
+    }
+    return result;
+}
+
+void VM::enqueueMicrotask(Value callback, Value arg) {
+    microtasks.push({callback, arg});
+}
+
+void VM::drainMicrotasks() {
+    while (!microtasks.empty()) {
+        auto task = microtasks.front();
+        microtasks.pop();
+        
+        int argCount = IS_UNDEFINED(task.second) ? 0 : 1;
+        push(task.first); // Push callee
+        if (argCount == 1) {
+            push(task.second); // Push argument
+        }
+        if (callValue(task.first, argCount)) {
+            run(); // Execute the microtask immediately on the call stack
+        }
+    }
+}
+
+void VM::runtimeError(const std::string& message) {
+    std::cerr << message << "\n";
+    for (int i = frameCount - 1; i >= 0; i--) {
+        CallFrame* frame = &frames[i];
+        ObjFunction* function = frame->closure->function;
+        size_t instruction = frame->ip - function->chunk.code.data() - 1;
+        std::cerr << "[line " << function->chunk.lines[instruction] << "] in ";
+        if (function->name.empty()) {
+            std::cerr << "script\n";
+        } else {
+            std::cerr << function->name << "()\n";
+        }
+    }
+    resetStack();
 }
 
 InterpretResult VM::run() {
@@ -141,7 +181,7 @@ InterpretResult VM::run() {
                 auto it = globals.find(name->chars);
                 if (it == globals.end()) {
                     std::cerr << "Undefined variable '" << name->chars << "'.\n";
-                    return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                    runtimeError("Runtime error."); return InterpretResult::INTERPRET_RUNTIME_ERROR;
                 }
                 push(it->second);
                 break;
@@ -156,7 +196,7 @@ InterpretResult VM::run() {
                 ObjString* name = AS_STRING(READ_CONSTANT());
                 if (globals.find(name->chars) == globals.end()) {
                     std::cerr << "Undefined variable '" << name->chars << "'.\n";
-                    return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                    runtimeError("Runtime error."); return InterpretResult::INTERPRET_RUNTIME_ERROR;
                 }
                 globals[name->chars] = peek(0);
                 break;
@@ -179,28 +219,28 @@ InterpretResult VM::run() {
                 break;
             }
             case static_cast<uint8_t>(OpCode::OP_GREATER): {
-                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) { runtimeError("Operands must be numbers."); return InterpretResult::INTERPRET_RUNTIME_ERROR; }
                 double b = AS_NUMBER(pop());
                 double a = AS_NUMBER(pop());
                 push(BOOL_VAL(a > b));
                 break;
             }
             case static_cast<uint8_t>(OpCode::OP_LESS): {
-                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) { runtimeError("Operands must be numbers."); return InterpretResult::INTERPRET_RUNTIME_ERROR; }
                 double b = AS_NUMBER(pop());
                 double a = AS_NUMBER(pop());
                 push(BOOL_VAL(a < b));
                 break;
             }
             case static_cast<uint8_t>(OpCode::OP_GREATER_EQUAL): {
-                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) { runtimeError("Operands must be numbers."); return InterpretResult::INTERPRET_RUNTIME_ERROR; }
                 double b = AS_NUMBER(pop());
                 double a = AS_NUMBER(pop());
                 push(BOOL_VAL(a >= b));
                 break;
             }
             case static_cast<uint8_t>(OpCode::OP_LESS_EQUAL): {
-                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) { runtimeError("Operands must be numbers."); return InterpretResult::INTERPRET_RUNTIME_ERROR; }
                 double b = AS_NUMBER(pop());
                 double a = AS_NUMBER(pop());
                 push(BOOL_VAL(a <= b));
@@ -216,33 +256,33 @@ InterpretResult VM::run() {
                     double a = AS_NUMBER(pop());
                     push(NUMBER_VAL(a + b));
                 } else {
-                    return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                    runtimeError("Runtime error."); return InterpretResult::INTERPRET_RUNTIME_ERROR;
                 }
                 break;
             }
             case static_cast<uint8_t>(OpCode::OP_SUBTRACT): {
-                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) { runtimeError("Operands must be numbers."); return InterpretResult::INTERPRET_RUNTIME_ERROR; }
                 double b = AS_NUMBER(pop());
                 double a = AS_NUMBER(pop());
                 push(NUMBER_VAL(a - b));
                 break;
             }
             case static_cast<uint8_t>(OpCode::OP_MULTIPLY): {
-                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) { runtimeError("Operands must be numbers."); return InterpretResult::INTERPRET_RUNTIME_ERROR; }
                 double b = AS_NUMBER(pop());
                 double a = AS_NUMBER(pop());
                 push(NUMBER_VAL(a * b));
                 break;
             }
             case static_cast<uint8_t>(OpCode::OP_DIVIDE): {
-                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) { runtimeError("Operands must be numbers."); return InterpretResult::INTERPRET_RUNTIME_ERROR; }
                 double b = AS_NUMBER(pop());
                 double a = AS_NUMBER(pop());
                 push(NUMBER_VAL(a / b));
                 break;
             }
             case static_cast<uint8_t>(OpCode::OP_MODULO): {
-                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) { runtimeError("Operands must be numbers."); return InterpretResult::INTERPRET_RUNTIME_ERROR; }
                 double b = AS_NUMBER(pop());
                 double a = AS_NUMBER(pop());
                 push(NUMBER_VAL(std::fmod(a, b)));
@@ -252,7 +292,7 @@ InterpretResult VM::run() {
                 push(BOOL_VAL(IS_FALSEY(pop())));
                 break;
             case static_cast<uint8_t>(OpCode::OP_NEGATE): {
-                if (!IS_NUMBER(peek(0))) return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                if (!IS_NUMBER(peek(0))) { runtimeError("Operand must be a number."); return InterpretResult::INTERPRET_RUNTIME_ERROR; }
                 push(NUMBER_VAL(-AS_NUMBER(pop())));
                 break;
             }
@@ -282,7 +322,7 @@ InterpretResult VM::run() {
             case static_cast<uint8_t>(OpCode::OP_CALL): {
                 int argCount = READ_BYTE();
                 if (!callValue(peek(argCount), argCount)) {
-                    return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                    runtimeError("Runtime error."); return InterpretResult::INTERPRET_RUNTIME_ERROR;
                 }
                 frame = &frames[frameCount - 1];
                 break;
@@ -343,23 +383,48 @@ InterpretResult VM::run() {
                 break;
             }
             case static_cast<uint8_t>(OpCode::OP_GET_PROPERTY): {
-                if (!IS_INSTANCE(peek(0))) return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                if (!IS_INSTANCE(peek(0))) { runtimeError("Only instances have properties."); return InterpretResult::INTERPRET_RUNTIME_ERROR; }
                 ObjInstance* instance = AS_INSTANCE(peek(0));
                 ObjString* name = AS_STRING(READ_CONSTANT());
                 
                 auto it = instance->fields.find(name->chars);
                 if (it != instance->fields.end()) {
                     pop(); // Instance
-                    push(it->second);
+                    if (it->second.get != nullptr) {
+                        push(OBJ_VAL(instance)); // push 'this' conceptually? actually we push nothing if it's 0 arity
+                        call(allocateClosure(it->second.get), 0);
+                    } else {
+                        push(it->second.value);
+                    }
                     break;
                 }
-                return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                
+                if (instance->klass != nullptr) {
+                    auto methodIt = instance->klass->methods.find(name->chars);
+                    if (methodIt != instance->klass->methods.end()) {
+                        pop(); // Instance
+                        push(methodIt->second);
+                        break;
+                    }
+                }
+                
+                runtimeError("Runtime error."); return InterpretResult::INTERPRET_RUNTIME_ERROR;
             }
             case static_cast<uint8_t>(OpCode::OP_SET_PROPERTY): {
-                if (!IS_INSTANCE(peek(1))) return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                if (!IS_INSTANCE(peek(1))) { runtimeError("Only instances have properties."); return InterpretResult::INTERPRET_RUNTIME_ERROR; }
                 ObjInstance* instance = AS_INSTANCE(peek(1));
                 ObjString* name = AS_STRING(READ_CONSTANT());
-                instance->fields[name->chars] = peek(0);
+                
+                auto it = instance->fields.find(name->chars);
+                if (it != instance->fields.end() && it->second.set != nullptr) {
+                    Value value = pop();
+                    pop(); // Instance
+                    push(value); // push argument for setter
+                    call(allocateClosure(it->second.set), 1);
+                    break;
+                }
+                
+                instance->fields[name->chars].value = peek(0);
                 Value value = pop();
                 pop(); // Instance
                 push(value);
@@ -378,10 +443,20 @@ InterpretResult VM::run() {
                     ObjInstance* inst = AS_INSTANCE(object);
                     std::string key = AS_STRING(property)->chars;
                     auto it = inst->fields.find(key);
-                    if (it != inst->fields.end()) push(it->second);
-                    else push(UNDEFINED_VAL());
+                    if (it != inst->fields.end()) push(it->second.value);
+                    else {
+                        bool found = false;
+                        if (inst->klass != nullptr) {
+                            auto methodIt = inst->klass->methods.find(key);
+                            if (methodIt != inst->klass->methods.end()) {
+                                push(methodIt->second);
+                                found = true;
+                            }
+                        }
+                        if (!found) push(UNDEFINED_VAL());
+                    }
                 } else {
-                    return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                    runtimeError("Runtime error."); return InterpretResult::INTERPRET_RUNTIME_ERROR;
                 }
                 break;
             }
@@ -396,14 +471,14 @@ InterpretResult VM::run() {
                         if (index >= arr->elements.size()) arr->elements.resize(index + 1, UNDEFINED_VAL());
                         arr->elements[index] = value;
                         push(value);
-                    } else return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                    } else runtimeError("Runtime error."); return InterpretResult::INTERPRET_RUNTIME_ERROR;
                 } else if (IS_INSTANCE(object) && IS_STRING(property)) {
                     ObjInstance* inst = AS_INSTANCE(object);
                     std::string key = AS_STRING(property)->chars;
-                    inst->fields[key] = value;
+                    inst->fields[key].value = value;
                     push(value);
                 } else {
-                    return InterpretResult::INTERPRET_RUNTIME_ERROR;
+                    runtimeError("Runtime error."); return InterpretResult::INTERPRET_RUNTIME_ERROR;
                 }
                 break;
             }

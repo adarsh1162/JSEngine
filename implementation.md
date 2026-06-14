@@ -1,68 +1,38 @@
-# JavaScript Interpreter/Compiler in C++ - Implementation Plan
+Bhai, code dekh liya. Tune sach mein core issues ko tackle kiya hai. `evaluator.cpp` mein `STRICT_EQUAL` (`===`) mein `.get()` se memory reference check lagana, bitwise operators ko `int32_t` aur `& 0x1F` se 32-bit math par lana, `super()` call context ko fix karna, aur `std::regex` implement karna—ye sab exactly wahi advanced level fixes hain jo ek genuine JS engine ko chahiye. Aur sabse bada bomb jo tune drop kiya hai wo hai **Bytecode VM (`vm.cpp`) aur Mark-and-Sweep GC (`gc.cpp`)** ka addition. Crafting Interpreters (Lox) ke low-level architecture ko JavaScript ke liye adapt karna ek outstanding move hai.
 
-## Goal Description
-The objective is to build an end-to-end JavaScript execution engine (Interpreter/Compiler) written in C++ **entirely from scratch**. The program will read JavaScript code (via file, stdin, or CLI arguments), parse it, execute it, and output the correct result to `stdout`. 
+Bina kisi sugarcoating ke, is engine ko main abhi **8.5/10** rate karunga. (Student/Hackathon project ke hisaab se ye 200/100 hai, par kyunki tum ab ek "True Production JS Engine" jaisa code likh rahe ho, main isko strictly V8 aur SpiderMonkey ke standard par judge kar raha hu).
 
-**Critical Requirement:** The engine will NOT be hardcoded to pass only the 5 test cases. It will be robust enough to handle **any valid JavaScript code** containing the supported features. We are participating in a hackathon, so innovation, zero external dependencies (no V8, no QuickJS), and full scratch implementation are mandatory.
+Ye 1.5 marks kyu kate aur abhi bhi kaun si **Hardcore Deep Limitations** bachi hain, uska solid analysis ye raha:
 
-## UI vs. Command Line (CLI) Decision
-**Recommendation: Direct Code (CLI) is the right approach.**
-Building a UI for a compiler/interpreter project introduces unnecessary overhead and distracts from the core goal: **Performance, Code Quality, and Execution Accuracy.** Compilers and runtimes (like Node.js, V8, GCC) are inherently command-line tools. By focusing strictly on a CLI, we can ensure the architecture remains pure, lightweight, and strictly focused on parsing and executing JavaScript at blazing speeds. 
+### 1. Architecture Clash: AST Walker vs Bytecode VM (Identity Crisis)
 
-## Implementation Approach
-**Architecture:** Option A (AST Tree-Walking Interpreter)
-Since we must build everything from scratch for a hackathon, an **AST Tree-Walking Interpreter** is the best choice. It allows us to implement complex features (closures, callbacks, spread/rest operators) robustly and maintain an industry-level codebase within a realistic timeframe. 
+Tune `vm.cpp` aur `gc.cpp` (Mark-Sweep) toh bana diya jisse memory leak fix ho sake, par tera execution abhi bhi split hai.
 
-**Built-in Objects (Math, Date) and Methods:**
-*All* specified Array, String, Math, and Date methods will be implemented natively from scratch in C++. 
+* **Limitation:** Tera `evaluator.cpp` (Tree-walking AST Evaluator) abhi bhi `std::shared_ptr` use kar raha hai aur `vm.cpp` completely alag raw pointers (`Obj*`) use kar raha hai. Agar tu JS code ko `Evaluator` ke through run karega, toh cyclic references mein **abhi bhi memory leak hogi** kyunki GC sirf VM ke sath integrated hai. Engine ko completely AST se Bytecode compilation (`compiler.cpp`) par shift karna padega jisse `evaluator.cpp` obsolete ho jaye.
 
-## Proposed Architecture
+### 2. Bytecode VM mein Prototype Inheritance Missing Hai (`vm.cpp`)
 
-The C++ JS Engine will be divided into the following core components:
+JavaScript purely prototype-based hai (Classes bas syntactic sugar hain). Par apne `vm.cpp` ke `OP_GET_PROPERTY` opcode ko dhyan se dekh:
 
-1. **Lexer (Tokenizer):** Reads the raw JS string and converts it into a stream of tokens (Keywords, Identifiers, Operators, Literals).
-2. **Parser:** Takes tokens and builds an Abstract Syntax Tree (AST) using Recursive Descent Parsing.
-3. **Environment (Scope Manager):** Handles variable scoping (let/const), closures, and memory mapping.
-4. **Runtime/Evaluator:** Traverses the AST and executes the logic.
-5. **Standard Library (JS Native Code in C++):** Pure C++ implementations of `console.log`, `Array`, `String`, `Math`, `Date`, etc.
+* **Limitation:** Wo sirf `instance->fields.find()` karta hai. Agar property ya method us particular instance par nahi mila, toh engine seedha "Runtime Error" de deta hai! Wo instance ke class (`instance->klass`) ya uske `__proto__` chain mein method ko dhoondhne nahi jata. Iska matlab VM ke andar Inheritance aur standard object methods (`obj.toString()`) puri tarah broken hain.
 
-## Milestones
+### 3. Asynchronous Execution (Microtasks & Promises)
 
-### Milestone 1: Core Foundation & Lexer
-- Setup C++ project structure (CMake).
-- Implement the `Token` and `Lexer` classes from scratch.
-- Support lexing for numbers, strings, identifiers, operators, and keywords.
+Tune `evaluator.cpp` mein `runEventLoop` banaya jo `setTimeout` aur `setInterval` (Macrotasks) perfectly handle karta hai. Par modern JS ka dil kuch aur hai:
 
-### Milestone 2: Parser & AST (Abstract Syntax Tree)
-- Define AST node classes (Expressions, Statements, Binary Operations, Literals).
-- Implement a Recursive Descent Parser from scratch.
-- Handle Variable Declarations (`let`, `const`) and basic Arithmetic/Logical operators.
+* **Limitation:** Modern JS bina **Promises** ke exist nahi karti. Tere Event Loop mein "Microtask Queue" missing hai. JS mein `Promise.resolve().then()` ya `async/await` tab tak kaam nahi karenge jab tak ek alag Microtask Queue na bane jo har Macrotask execution ke baad call-stack khali hone par execute ho. Engine async state-machines ko pause/resume nahi kar sakta.
 
-### Milestone 3: Basic Evaluator & Scope
-- Implement the `Environment` class for lexical scoping.
-- Implement the `Evaluator` to walk the AST and compute basic expressions.
-- Implement `console.log` natively to pass Test Case 1 (Odd/Even Checker).
-- Handle Conditional statements (`if`, `else if`, `switch`).
+### 4. Property Attributes (Getters/Setters & Descriptors)
 
-### Milestone 4: Control Flow & Functions
-- Implement Loops (`for`, `while`, `do...while`) to pass Test Case 2 (Triangle Pattern).
-- Implement Function declarations, Arrow functions, Callbacks, and Return statements.
-- Implement closures and execution contexts to pass Test Case 3 (Armstrong Number).
+* **Limitation:** JavaScript mein properties sirf simple key-value pairs nahi hotin. Unke paas property descriptors hote hain: `enumerable`, `writable`, `configurable`, `get()`, aur `set()`. Tere engine mein (dono VM aur Evaluator mein) properties directly `std::unordered_map` mein store hoti hain. Agar main `Object.defineProperty(obj, 'x', { get: () => 5 })` likhna chahu, toh engine crash ho jayega kyunki hidden getter/setter function invocation ka concept memory map mein implement hi nahi kiya gaya hai.
 
-### Milestone 5: Arrays, Strings, and Built-ins
-- Implement JS `Array` wrapper in C++ (with methods like `push`, `pop`, `reverse`, `join`, `map`, `filter`, etc.) entirely from scratch.
-- Pass Test Case 4 (Array Reverse).
-- Implement JS `String` wrapper (with methods like `split`, `replace`, `substring`, `trim`, etc.).
-- Pass Test Case 5 (String Palindrome Check).
-- Implement `Math` and `Date` native objects.
+### 5. `for...of` Loop ek "C++ Hack" Hai (`Symbol.iterator` missing)
 
-### Milestone 6: Advanced Features & Memory
-- Implement Objects (Dictionaries/Hashmaps in C++).
-- Implement Spread (`...`) and Rest operators.
-- Type conversion and coercion logic.
-- Code cleanup, applying strictly humanized and necessary comments.
+* **Limitation:** Tune `evaluator.cpp` mein `for...of` ko Array aur String ke liye hardcode kar diya hai jahan C++ level par iteration ho raha hai. Asli JS engine mein `for...of` sirf un objects par chalta hai jinke paas `[Symbol.iterator]()` method ho. Kyunki engine mein `Symbol` primitive type aur Iterator protocol ka native implementation nahi hai, koi bhi user-defined custom iterable ya Generator function (`function*`) is engine par nahi chal payega.
 
-## Verification Plan
-- Run all 5 provided JS test cases through the compiled C++ executable.
-- Run hidden test cases (complex valid JS code) to ensure robustness.
-- Check memory leaks to ensure industry-level code quality.
+### 6. Call Stack Tracing (Error Handling Context)
+
+* **Limitation:** Jab JS mein error aati hai (`throw new Error("Oops")`), toh production engines ek poora stack trace (`error.stack`) generate karte hain jisme functions ki chain aur line numbers track hote hain. Tera engine `throw JSException` ke zariye directly C++ exception throw karta hai, par JS ke execution frames (kaunsa function kisko call kar raha tha) ka track error object mein store nahi karta. Is wajah se complex code mein runtime errors ko debug karna lagbhag impossible ho jayega.
+
+**Final Verdict:**
+Tune engine ki foundation ekdum killer level par pahuncha di hai. C++ mein scratch se Garbage Collector aur Bytecode VM likhna ek engineering marvel hai. Ab tera next "Masterstroke" ye hona chahiye ki tu `evaluator.cpp` ko kachre ke dabbe mein daal de, aur **100% execution sirf Bytecode VM (`vm.cpp`) aur `compiler.cpp` ke through kare**, aur usme Prototype Chain lookups add karde. Bohot hi tagda kaam kiya hai!

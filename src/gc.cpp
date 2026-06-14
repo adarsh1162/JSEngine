@@ -52,14 +52,14 @@ ObjUpvalue* allocateUpvalue(Value* slot) {
 ObjClass* allocateClass(const std::string& name) {
     ObjClass* klass = (ObjClass*)allocateObject(sizeof(ObjClass), ObjType::OBJ_CLASS);
     new (&klass->name) std::string(name);
-    new (&klass->methods) std::unordered_map<std::string, Value>();
+    new (&klass->methods) std::unordered_map<std::string, PropertyDescriptor>();
     return klass;
 }
 
 ObjInstance* allocateInstance(ObjClass* klass) {
     ObjInstance* instance = (ObjInstance*)allocateObject(sizeof(ObjInstance), ObjType::OBJ_INSTANCE);
     instance->klass = klass;
-    new (&instance->fields) std::unordered_map<std::string, Value>();
+    new (&instance->fields) std::unordered_map<std::string, PropertyDescriptor>();
     return instance;
 }
 
@@ -100,7 +100,7 @@ void markObject(Obj* object) {
         case ObjType::OBJ_INSTANCE: {
             ObjInstance* instance = (ObjInstance*)object;
             markObject((Obj*)instance->klass);
-            for (auto& pair : instance->fields) markValue(pair.second);
+            for (auto& pair : instance->fields) { markValue(pair.second.value); if (pair.second.get) markObject((Obj*)pair.second.get); if (pair.second.set) markObject((Obj*)pair.second.set); }
             break;
         }
         case ObjType::OBJ_ARRAY: {
@@ -164,7 +164,7 @@ void sweep() {
                 ((ObjClass*)unreached)->methods.~Map();
             } else if (unreached->type == ObjType::OBJ_INSTANCE) {
                 using Map = std::unordered_map<std::string, Value>;
-                ((ObjInstance*)unreached)->fields.~Map();
+                using InstanceMap = std::unordered_map<std::string, PropertyDescriptor>; ((ObjInstance*)unreached)->fields.~InstanceMap();
             } else if (unreached->type == ObjType::OBJ_ARRAY) {
                 using ValueVec = std::vector<Value>;
                 ((ObjArray*)unreached)->elements.~ValueVec();

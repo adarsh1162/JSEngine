@@ -56,9 +56,23 @@ struct ObjClass : public Obj {
     std::unordered_map<std::string, Value> methods;
 };
 
+struct PropertyDescriptor {
+    Value value;
+    ObjFunction* get;
+    ObjFunction* set;
+    bool configurable;
+    bool enumerable;
+    bool writable;
+
+    PropertyDescriptor() : value(UNDEFINED_VAL()), get(nullptr), set(nullptr),
+                           configurable(true), enumerable(true), writable(true) {}
+    PropertyDescriptor(Value val) : value(val), get(nullptr), set(nullptr),
+                                    configurable(true), enumerable(true), writable(true) {}
+};
+
 struct ObjInstance : public Obj {
     ObjClass* klass;
-    std::unordered_map<std::string, Value> fields;
+    std::unordered_map<std::string, PropertyDescriptor> fields;
 };
 
 struct ObjArray : public Obj {
