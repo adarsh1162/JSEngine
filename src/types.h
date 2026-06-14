@@ -73,6 +73,7 @@ public:
     std::shared_ptr<FunctionDeclaration> declaration;
     std::shared_ptr<Environment> closure;
     std::shared_ptr<JSValue> prototypeProperty;
+    bool isArrow = false;
 
     JSFunction(std::shared_ptr<FunctionDeclaration> decl, std::shared_ptr<Environment> env);
 

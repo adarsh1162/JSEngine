@@ -1,5 +1,6 @@
 #include "builtins.h"
 #include <algorithm>
+#include <regex>
 
 std::shared_ptr<JSValue> getArrayMethod(std::shared_ptr<JSArray> array, const std::string& methodName, std::function<std::shared_ptr<JSValue>(std::shared_ptr<JSFunction>, const std::vector<std::shared_ptr<JSValue>>&)> invokeFunc) {
     if (methodName == "filter") {
@@ -257,6 +258,48 @@ std::shared_ptr<JSValue> getStringMethod(std::shared_ptr<JSString> str, const st
                 res.replace(pos, search.length(), replace);
             }
             return std::shared_ptr<JSValue>(std::make_shared<JSString>(res));
+        });
+    }
+    if (methodName == "match") {
+        return std::make_shared<JSNativeFunction>("match", [str](const std::vector<std::shared_ptr<JSValue>>& args) {
+            if (args.empty() || args[0]->getType() != JSValueType::OBJECT) return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+            auto regexObj = std::dynamic_pointer_cast<JSObject>(args[0]);
+            if (!regexObj->properties.count("source")) return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+            
+            std::string pattern = regexObj->properties["source"]->toString();
+            if (pattern.length() >= 2 && pattern.front() == '/' && pattern.back() == '/') {
+                pattern = pattern.substr(1, pattern.length() - 2);
+            }
+            std::string flags = regexObj->properties.count("flags") ? regexObj->properties["flags"]->toString() : "";
+            
+            try {
+                std::regex_constants::syntax_option_type opt = std::regex_constants::ECMAScript;
+                if (flags.find('i') != std::string::npos) opt |= std::regex_constants::icase;
+                std::regex r(pattern, opt);
+                
+                if (flags.find('g') != std::string::npos) {
+                    auto arr = std::make_shared<JSArray>();
+                    auto words_begin = std::sregex_iterator(str->value.begin(), str->value.end(), r);
+                    auto words_end = std::sregex_iterator();
+                    for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
+                        arr->elements.push_back(std::make_shared<JSString>(i->str()));
+                    }
+                    if (arr->elements.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+                    return std::shared_ptr<JSValue>(arr);
+                } else {
+                    std::smatch match;
+                    if (std::regex_search(str->value, match, r)) {
+                        auto arr = std::make_shared<JSArray>();
+                        for (size_t i = 0; i < match.size(); ++i) {
+                            arr->elements.push_back(std::make_shared<JSString>(match.str(i)));
+                        }
+                        return std::shared_ptr<JSValue>(arr);
+                    }
+                    return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+                }
+            } catch (...) {
+                return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+            }
         });
     }
     return std::make_shared<JSUndefined>();

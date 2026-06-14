@@ -2,6 +2,8 @@
 #include "builtins.h"
 #include <cmath>
 #include <chrono>
+#include <regex>
+#include <cstdint>
 
 // --- Builtins ---
 std::shared_ptr<JSValue> builtin_console_log(const std::vector<std::shared_ptr<JSValue>>& args) {
@@ -543,6 +545,7 @@ void Evaluator::execute(std::shared_ptr<Statement> stmt) {
         }
         
         classConstructor->prototypeProperty = prototype;
+        prototype->properties["constructor"] = classConstructor;
         environment->define(classDecl->name, classConstructor);
     }
     else if (auto returnStmt = std::dynamic_pointer_cast<ReturnStatement>(stmt)) {
@@ -638,7 +641,9 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
     }
     if (auto arrowExpr = std::dynamic_pointer_cast<ArrowFunctionExpression>(expr)) {
         auto decl = std::make_shared<FunctionDeclaration>("", arrowExpr->parameters, arrowExpr->body);
-        return std::make_shared<JSFunction>(decl, environment);
+        auto func = std::make_shared<JSFunction>(decl, environment);
+        func->isArrow = true;
+        return func;
     }
     if (auto tpl = std::dynamic_pointer_cast<TemplateLiteralExpression>(expr)) {
         std::string result = "";
@@ -652,6 +657,27 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
         auto obj = std::make_shared<JSObject>();
         obj->properties["source"] = std::make_shared<JSString>(regex->pattern);
         obj->properties["flags"] = std::make_shared<JSString>(regex->flags);
+        
+        obj->properties["test"] = std::make_shared<JSNativeFunction>("test", [regex](const std::vector<std::shared_ptr<JSValue>>& args) {
+            if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(false));
+            std::string str = args[0]->toString();
+            try {
+                std::regex_constants::syntax_option_type opt = std::regex_constants::ECMAScript;
+                if (regex->flags.find('i') != std::string::npos) opt |= std::regex_constants::icase;
+                
+                std::string pat = regex->pattern;
+                if (pat.length() >= 2 && pat.front() == '/' && pat.back() == '/') {
+                    pat = pat.substr(1, pat.length() - 2);
+                }
+                
+                std::regex r(pat, opt);
+                bool match = std::regex_search(str, r);
+                return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(match));
+            } catch (...) {
+                return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(false));
+            }
+        });
+
         return obj;
     }
     if (auto condExpr = std::dynamic_pointer_cast<ConditionalExpression>(expr)) {
@@ -843,12 +869,12 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             case TokenType::DIVIDE: return std::make_shared<JSNumber>(left->toNumber() / right->toNumber());
             case TokenType::MODULO: return std::make_shared<JSNumber>(std::fmod(left->toNumber(), right->toNumber()));
             case TokenType::POWER: return std::make_shared<JSNumber>(std::pow(left->toNumber(), right->toNumber()));
-            case TokenType::BITWISE_AND: return std::make_shared<JSNumber>(static_cast<int>(left->toNumber()) & static_cast<int>(right->toNumber()));
-            case TokenType::BITWISE_OR: return std::make_shared<JSNumber>(static_cast<int>(left->toNumber()) | static_cast<int>(right->toNumber()));
-            case TokenType::BITWISE_XOR: return std::make_shared<JSNumber>(static_cast<int>(left->toNumber()) ^ static_cast<int>(right->toNumber()));
-            case TokenType::LEFT_SHIFT: return std::make_shared<JSNumber>(static_cast<int>(left->toNumber()) << static_cast<int>(right->toNumber()));
-            case TokenType::RIGHT_SHIFT: return std::make_shared<JSNumber>(static_cast<int>(left->toNumber()) >> static_cast<int>(right->toNumber()));
-            case TokenType::UNSIGNED_RIGHT_SHIFT: return std::make_shared<JSNumber>(static_cast<unsigned int>(left->toNumber()) >> static_cast<unsigned int>(right->toNumber()));
+            case TokenType::BITWISE_AND: return std::make_shared<JSNumber>(static_cast<int32_t>(left->toNumber()) & static_cast<int32_t>(right->toNumber()));
+            case TokenType::BITWISE_OR: return std::make_shared<JSNumber>(static_cast<int32_t>(left->toNumber()) | static_cast<int32_t>(right->toNumber()));
+            case TokenType::BITWISE_XOR: return std::make_shared<JSNumber>(static_cast<int32_t>(left->toNumber()) ^ static_cast<int32_t>(right->toNumber()));
+            case TokenType::LEFT_SHIFT: return std::make_shared<JSNumber>(static_cast<int32_t>(left->toNumber()) << (static_cast<uint32_t>(right->toNumber()) & 0x1F));
+            case TokenType::RIGHT_SHIFT: return std::make_shared<JSNumber>(static_cast<int32_t>(left->toNumber()) >> (static_cast<uint32_t>(right->toNumber()) & 0x1F));
+            case TokenType::UNSIGNED_RIGHT_SHIFT: return std::make_shared<JSNumber>(static_cast<uint32_t>(left->toNumber()) >> (static_cast<uint32_t>(right->toNumber()) & 0x1F));
             case TokenType::EQUAL:
                 if (left->getType() == JSValueType::NULL_TYPE && right->getType() == JSValueType::UNDEFINED) return std::make_shared<JSBoolean>(true);
                 if (left->getType() == JSValueType::UNDEFINED && right->getType() == JSValueType::NULL_TYPE) return std::make_shared<JSBoolean>(true);
@@ -865,6 +891,11 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
                     return std::make_shared<JSBoolean>(left->toNumber() == right->toNumber());
                 if (left->getType() == JSValueType::STRING && right->getType() == JSValueType::STRING)
                     return std::make_shared<JSBoolean>(left->toString() == right->toString());
+                if ((left->getType() == JSValueType::OBJECT && right->getType() == JSValueType::OBJECT) ||
+                    (left->getType() == JSValueType::ARRAY && right->getType() == JSValueType::ARRAY) ||
+                    (left->getType() == JSValueType::FUNCTION && right->getType() == JSValueType::FUNCTION)) {
+                    return std::make_shared<JSBoolean>(left.get() == right.get());
+                }
                 return std::make_shared<JSBoolean>(left->getType() == right->getType() && left->toString() == right->toString());
             case TokenType::NOT_EQUAL:
                 // Simple NOT EQUAL implementation by negating EQUAL
@@ -882,6 +913,11 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
                     return std::make_shared<JSBoolean>(left->toNumber() != right->toNumber());
                 if (left->getType() == JSValueType::STRING && right->getType() == JSValueType::STRING)
                     return std::make_shared<JSBoolean>(left->toString() != right->toString());
+                if ((left->getType() == JSValueType::OBJECT && right->getType() == JSValueType::OBJECT) ||
+                    (left->getType() == JSValueType::ARRAY && right->getType() == JSValueType::ARRAY) ||
+                    (left->getType() == JSValueType::FUNCTION && right->getType() == JSValueType::FUNCTION)) {
+                    return std::make_shared<JSBoolean>(left.get() != right.get());
+                }
                 return std::make_shared<JSBoolean>(left->getType() != right->getType() || left->toString() != right->toString());
             case TokenType::LESS:
                 return std::make_shared<JSBoolean>(left->toNumber() < right->toNumber());
@@ -897,6 +933,18 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
     }
     if (auto call = std::dynamic_pointer_cast<CallExpression>(expr)) {
         auto callee = evaluate(call->callee);
+        
+        if (std::dynamic_pointer_cast<SuperExpression>(call->callee)) {
+            if (callee->getType() == JSValueType::OBJECT) {
+                auto parentProto = std::dynamic_pointer_cast<JSObject>(callee);
+                if (parentProto->properties.count("constructor")) {
+                    callee = parentProto->properties["constructor"];
+                } else {
+                    throw RuntimeError("TypeError: Super constructor not found");
+                }
+            }
+        }
+
         std::vector<std::shared_ptr<JSValue>> args;
         for (const auto& argExpr : call->arguments) {
             if (auto spread = std::dynamic_pointer_cast<SpreadElement>(argExpr)) {
@@ -924,11 +972,16 @@ std::shared_ptr<JSValue> Evaluator::evaluate(std::shared_ptr<Expression> expr) {
             
             auto funcEnv = std::make_shared<Environment>(func->closure);
             
-            if (auto memberExpr = std::dynamic_pointer_cast<MemberExpression>(call->callee)) {
-                auto thisObj = evaluate(memberExpr->object);
-                funcEnv->define("this", thisObj);
-            } else {
-                funcEnv->define("this", std::make_shared<JSUndefined>());
+            if (std::dynamic_pointer_cast<SuperExpression>(call->callee)) {
+                funcEnv->define("this", environment->get("this"));
+            }
+            else if (!func->isArrow) {
+                if (auto memberExpr = std::dynamic_pointer_cast<MemberExpression>(call->callee)) {
+                    auto thisObj = evaluate(memberExpr->object);
+                    funcEnv->define("this", thisObj);
+                } else {
+                    funcEnv->define("this", std::make_shared<JSUndefined>());
+                }
             }
 
             size_t paramCount = func->declaration->parameters.size();
