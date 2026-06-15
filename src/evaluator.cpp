@@ -72,6 +72,115 @@ std::shared_ptr<JSValue> builtin_math_floor(const std::vector<std::shared_ptr<JS
     return std::make_shared<JSNumber>(std::floor(args[0]->toNumber()));
 }
 
+namespace fs = std::filesystem;
+
+std::string Evaluator::resolveModule(const std::string& requestPath, const std::string& currentDir) {
+    auto tryPath = [](const fs::path& p) -> std::string {
+        if (fs::is_regular_file(p)) return p.string();
+        if (fs::is_regular_file(p.string() + ".js")) return p.string() + ".js";
+        if (fs::is_regular_file(p / "package.json")) {
+            std::ifstream file(p / "package.json");
+            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            size_t mainPos = content.find("\"main\"");
+            if (mainPos != std::string::npos) {
+                size_t colonPos = content.find(":", mainPos);
+                size_t startQuote = content.find("\"", colonPos);
+                if (startQuote != std::string::npos) {
+                    size_t endQuote = content.find("\"", startQuote + 1);
+                    if (endQuote != std::string::npos) {
+                        std::string mainFile = content.substr(startQuote + 1, endQuote - startQuote - 1);
+                        fs::path mainPath = p / mainFile;
+                        if (fs::is_regular_file(mainPath)) return mainPath.string();
+                        if (fs::is_regular_file(mainPath.string() + ".js")) return mainPath.string() + ".js";
+                    }
+                }
+            }
+        }
+        if (fs::is_regular_file(p / "index.js")) return (p / "index.js").string();
+        return "";
+    };
+
+    if (requestPath.substr(0, 2) == "./" || requestPath.substr(0, 3) == "../" || requestPath.substr(0, 1) == "/" || requestPath.substr(0, 2) == ".\\") {
+        fs::path p = fs::path(currentDir) / requestPath;
+        std::string res = tryPath(p);
+        if (!res.empty()) {
+            try { return fs::weakly_canonical(res).string(); } catch (...) { return res; }
+        }
+    } else {
+        fs::path current = currentDir;
+        while (true) {
+            fs::path p = current / "node_modules" / requestPath;
+            std::string res = tryPath(p);
+            if (!res.empty()) {
+                try { return fs::weakly_canonical(res).string(); } catch (...) { return res; }
+            }
+            if (!current.has_parent_path() || current == current.parent_path()) break;
+            current = current.parent_path();
+        }
+    }
+    return "";
+}
+
+std::shared_ptr<JSValue> Evaluator::createRequireFunction(const std::string& currentDir) {
+    return std::make_shared<JSNativeFunction>("require", [this, currentDir](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        if (args.empty()) throw std::runtime_error("TypeError: require expects 1 argument");
+        std::string requestPath = args[0]->toString();
+        
+        if (requestPath == "fs" || requestPath == "path" || requestPath == "crypto" || requestPath == "sqlite" || requestPath == "ws" || requestPath == "child_process") {
+            return this->environment->get(requestPath);
+        }
+        
+        std::string resolvedPath = this->resolveModule(requestPath, currentDir);
+        if (resolvedPath.empty()) {
+            throw std::runtime_error("Error: Cannot find module '" + requestPath + "'");
+        }
+        
+        if (this->requireCache.find(resolvedPath) != this->requireCache.end()) {
+            return this->requireCache[resolvedPath];
+        }
+        
+        std::ifstream file(resolvedPath);
+        if (!file.is_open()) throw std::runtime_error("Error: Cannot read module '" + resolvedPath + "'");
+        std::string code((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        
+        Lexer lexer(code);
+        auto tokens = lexer.tokenize();
+        Parser parser(tokens);
+        auto ast = parser.parse();
+        
+        auto moduleEnv = std::make_shared<Environment>(this->environment);
+        auto moduleObj = std::make_shared<JSObject>();
+        auto exportsObj = std::make_shared<JSObject>();
+        moduleObj->properties["exports"] = JSPropertyDescriptor{exportsObj, nullptr, nullptr, true, true, true};
+        
+        std::string newDir = fs::path(resolvedPath).parent_path().string();
+        moduleEnv->define("__dirname", std::make_shared<JSString>(newDir));
+        moduleEnv->define("__filename", std::make_shared<JSString>(resolvedPath));
+        moduleEnv->define("module", moduleObj);
+        moduleEnv->define("exports", exportsObj);
+        moduleEnv->define("require", this->createRequireFunction(newDir));
+        
+        this->requireCache[resolvedPath] = exportsObj;
+        
+        auto previousEnv = this->environment;
+        this->environment = moduleEnv;
+        try {
+            if (ast) {
+                for (const auto& stmt : ast->body) hoist(stmt);
+                for (const auto& stmt : ast->body) execute(stmt);
+            }
+        } catch (...) {
+            this->environment = previousEnv;
+            throw;
+        }
+        this->environment = previousEnv;
+        
+        std::shared_ptr<JSValue> finalExports = moduleObj->properties["exports"].value;
+        this->requireCache[resolvedPath] = finalExports;
+        return finalExports;
+    });
+}
+
 Evaluator::Evaluator() {
     environment = std::make_shared<Environment>();
     setupGlobalEnvironment();
@@ -195,45 +304,7 @@ void Evaluator::setupGlobalEnvironment() {
 
     environment->define("Object", objectConstructor);    
     // Add require
-    environment->define("require", std::make_shared<JSNativeFunction>("require", [this](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
-        if (args.empty()) throw RuntimeError("TypeError: require expects 1 argument");
-        std::string filename = args[0]->toString();
-        
-        if (filename == "fs" || filename == "path") {
-            return std::shared_ptr<JSValue>(std::make_shared<JSObject>());
-        }
-        
-        std::ifstream file(filename);
-        if (!file.is_open()) {
-            throw RuntimeError("Error: Cannot find module '" + filename + "'");
-        }
-        std::string code((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        
-        Lexer lexer(code);
-        auto tokens = lexer.tokenize();
-        Parser parser(tokens);
-        auto ast = parser.parse();
-        
-        auto moduleEnv = std::make_shared<Environment>(this->environment);
-        auto moduleObj = std::make_shared<JSObject>();
-        auto exportsObj = std::make_shared<JSObject>();
-        moduleObj->properties["exports"].value = exportsObj;
-        moduleEnv->define("module", moduleObj);
-        moduleEnv->define("exports", exportsObj);
-        
-        auto previousEnv = this->environment;
-        this->environment = moduleEnv;
-        try {
-            for (const auto& stmt : ast->body) hoist(stmt);
-            for (const auto& stmt : ast->body) execute(stmt);
-        } catch (...) {
-            this->environment = previousEnv;
-            throw;
-        }
-        this->environment = previousEnv;
-        
-        return moduleObj->properties["exports"].value;
-    }));
+    environment->define("require", this->createRequireFunction(fs::current_path().string()));
 
     // Add fs
     auto fsObj = std::make_shared<JSObject>();

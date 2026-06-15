@@ -114,6 +114,11 @@ public:
     
     void runEventLoop();
 
+    // Module Resolution Cache
+    std::unordered_map<std::string, std::shared_ptr<JSValue>> requireCache;
+    std::string resolveModule(const std::string& requestPath, const std::string& currentDir);
+    std::shared_ptr<JSValue> createRequireFunction(const std::string& currentDir);
+
     // Helpers
     std::shared_ptr<JSValue> evaluate(std::shared_ptr<Expression> expr);
     std::shared_ptr<JSValue> executeFunction(std::shared_ptr<JSValue> funcVal, std::shared_ptr<JSValue> thisContext, const std::vector<std::shared_ptr<JSValue>>& args);
