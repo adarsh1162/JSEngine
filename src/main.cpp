@@ -14,8 +14,14 @@ void run(const std::string& source) {
     Lexer lexer(source);
     auto tokens = lexer.tokenize();
 
-    Parser parser(tokens);
-    auto program = parser.parse();
+    std::shared_ptr<Program> program = nullptr;
+    try {
+        Parser parser(tokens);
+        program = parser.parse();
+    } catch(const std::exception& e) {
+        std::cerr << "Syntax Error: " << e.what() << "\n";
+        return;
+    }
 
     if (!program) {
         std::cerr << "Syntax Error: Parsing failed.\n";

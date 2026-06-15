@@ -95,14 +95,15 @@ public:
     std::shared_ptr<JSValue> evalStringLiteral(StringLiteral* expr);
 
 private:
-    std::shared_ptr<Environment> environment;
     int callStackDepth = 0;
     std::vector<std::string> executionStack;
     int eventLoopTick = 0;
-    std::shared_ptr<JSObject> objectPrototype;
     std::shared_ptr<JSValue> lastThisContext;
 
 public:
+    std::shared_ptr<Environment> environment;
+    std::shared_ptr<JSObject> objectPrototype;
+    std::shared_ptr<JSObject> arrayPrototype;
     std::vector<TimerTask> timerQueue;
     std::unordered_set<int> cancelledTimers;
     int nextTimerId = 1;

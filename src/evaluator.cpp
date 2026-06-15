@@ -1,4 +1,11 @@
 #include "evaluator.h"
+
+#include "net_http.h"
+#include "worker_api.h"
+#include "crypto_api.h"
+#include "sqlite_api.h"
+#include "net_ws.h"
+#include <iostream>
 #include <fstream>
 #include <filesystem>
 #include "builtins.h"
@@ -6,8 +13,15 @@
 #include <chrono>
 #include <regex>
 #include <cstdint>
+#include <queue>
+#include <mutex>
+#include <thread>
 #include "lexer.h"
 #include "parser.h"
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 // --- Builtins ---
 std::shared_ptr<JSValue> builtin_console_log(const std::vector<std::shared_ptr<JSValue>>& args) {
@@ -61,6 +75,33 @@ std::shared_ptr<JSValue> builtin_math_floor(const std::vector<std::shared_ptr<JS
 Evaluator::Evaluator() {
     environment = std::make_shared<Environment>();
     setupGlobalEnvironment();
+
+    // Inject JS Polyfills (fetch)
+    std::string polyfills = R"(
+        const fetch = function(url) {
+            return new Promise(function(resolve, reject) {
+                try {
+                    let output = child_process.execSync("curl -sL \"" + url + "\"");
+                    resolve({
+                        text: function() { return new Promise(function(r) { r(output); }); },
+                        json: function() { return new Promise(function(r) { r(JSON.parse(output)); }); }
+                    });
+                } catch(e) {
+                    reject(e);
+                }
+            });
+        };
+    )";
+    try {
+        Lexer lexer(polyfills);
+        auto tokens = lexer.tokenize();
+        Parser parser(tokens);
+        auto ast = parser.parse();
+        if (ast) {
+            for (const auto& stmt : ast->body) hoist(stmt);
+            for (const auto& stmt : ast->body) execute(stmt);
+        }
+    } catch (...) {}
 }
 
 void Evaluator::setupGlobalEnvironment() {
@@ -248,6 +289,65 @@ void Evaluator::setupGlobalEnvironment() {
         return std::make_shared<JSUndefined>();
     }), nullptr, nullptr, true, true, true};
 
+    // Thread-safe event queue for fs.watch
+    static std::mutex fsWatchMutex;
+    static std::queue<std::pair<std::shared_ptr<JSValue>, std::string>> fsEvents;
+
+    fsObj->properties["watch"] = JSPropertyDescriptor{std::make_shared<JSNativeFunction>("watch", [this](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        if (args.size() < 2) throw RuntimeError("TypeError: watch requires dir path and callback");
+        std::string path = args[0]->toString();
+        auto callback = args[1];
+        
+        // Polling task
+        TimerTask pollTask;
+        pollTask.triggerTimeMs = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now()).time_since_epoch().count() + 50;
+        pollTask.isInterval = true;
+        pollTask.intervalMs = 50;
+        pollTask.callback = std::make_shared<JSNativeFunction>("fsWatchPoll", [this, callback](const std::vector<std::shared_ptr<JSValue>>&) {
+            std::string changedFile;
+            {
+                std::lock_guard<std::mutex> lock(fsWatchMutex);
+                if (!fsEvents.empty()) {
+                    auto event = fsEvents.front();
+                    if (event.first == callback) {
+                        changedFile = event.second;
+                        fsEvents.pop();
+                    }
+                }
+            }
+            if (!changedFile.empty()) {
+                executeFunction(callback, nullptr, {std::make_shared<JSString>("change"), std::make_shared<JSString>(changedFile)});
+            }
+            return std::make_shared<JSUndefined>();
+        });
+        this->timerQueue.push_back(pollTask);
+
+        std::thread([path, callback]() {
+#ifdef _WIN32
+            HANDLE hDir = CreateFileA(path.c_str(), FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+            if (hDir == INVALID_HANDLE_VALUE) return;
+            char buf[1024];
+            DWORD bytesReturned;
+            while (true) {
+                if (ReadDirectoryChangesW(hDir, buf, sizeof(buf), TRUE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE, &bytesReturned, NULL, NULL)) {
+                    FILE_NOTIFY_INFORMATION* fni = (FILE_NOTIFY_INFORMATION*)buf;
+                    do {
+                        std::wstring ws(fni->FileName, fni->FileNameLength / sizeof(WCHAR));
+                        std::string filename(ws.begin(), ws.end());
+                        {
+                            std::lock_guard<std::mutex> lock(fsWatchMutex);
+                            fsEvents.push({callback, filename});
+                        }
+                        if (fni->NextEntryOffset == 0) break;
+                        fni = (FILE_NOTIFY_INFORMATION*)((char*)fni + fni->NextEntryOffset);
+                    } while (true);
+                }
+            }
+#endif
+        }).detach();
+        return std::make_shared<JSUndefined>();
+    }), nullptr, nullptr, true, true, true};
+
     environment->define("fs", fsObj);
 
     // Add child_process
@@ -293,6 +393,15 @@ void Evaluator::setupGlobalEnvironment() {
     }), nullptr, nullptr, true, true, true};
 
     environment->define("process", processObj);
+
+    // Add http
+    environment->define("http", createHttpModule(this));
+    environment->define("crypto", createCryptoModule(this));
+    environment->define("sqlite", createSqliteModule(this));
+    environment->define("ws", createWsModule(this));
+    
+    // Create native Worker polyfill via createWorkerModule
+    createWorkerModule(this);
 
     auto jsonObj = std::make_shared<JSObject>();
     jsonObj->prototype = objectPrototype;
