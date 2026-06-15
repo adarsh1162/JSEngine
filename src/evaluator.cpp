@@ -102,6 +102,55 @@ void Evaluator::setupGlobalEnvironment() {
         obj->properties[prop] = pd;
         return args[0];
     });
+    objectConstructor->properties["keys"].value = std::make_shared<JSNativeFunction>("keys", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty() || args[0]->getType() != JSValueType::OBJECT) throw RuntimeError("TypeError: Object.keys called on non-object");
+        auto obj = std::dynamic_pointer_cast<JSObject>(args[0]);
+        auto arr = std::make_shared<JSArray>();
+        for (const auto& pair : obj->properties) {
+            if (pair.second.enumerable) arr->elements.push_back(std::make_shared<JSString>(pair.first));
+        }
+        return std::shared_ptr<JSValue>(arr);
+    });
+
+    objectConstructor->properties["values"].value = std::make_shared<JSNativeFunction>("values", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty() || args[0]->getType() != JSValueType::OBJECT) throw RuntimeError("TypeError: Object.values called on non-object");
+        auto obj = std::dynamic_pointer_cast<JSObject>(args[0]);
+        auto arr = std::make_shared<JSArray>();
+        for (const auto& pair : obj->properties) {
+            if (pair.second.enumerable) arr->elements.push_back(pair.second.value);
+        }
+        return std::shared_ptr<JSValue>(arr);
+    });
+
+    objectConstructor->properties["entries"].value = std::make_shared<JSNativeFunction>("entries", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty() || args[0]->getType() != JSValueType::OBJECT) throw RuntimeError("TypeError: Object.entries called on non-object");
+        auto obj = std::dynamic_pointer_cast<JSObject>(args[0]);
+        auto arr = std::make_shared<JSArray>();
+        for (const auto& pair : obj->properties) {
+            if (pair.second.enumerable) {
+                auto entry = std::make_shared<JSArray>();
+                entry->elements.push_back(std::make_shared<JSString>(pair.first));
+                entry->elements.push_back(pair.second.value);
+                arr->elements.push_back(entry);
+            }
+        }
+        return std::shared_ptr<JSValue>(arr);
+    });
+
+    objectConstructor->properties["assign"].value = std::make_shared<JSNativeFunction>("assign", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty() || args[0]->getType() != JSValueType::OBJECT) throw RuntimeError("TypeError: Object.assign called on non-object");
+        auto target = std::dynamic_pointer_cast<JSObject>(args[0]);
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i]->getType() == JSValueType::OBJECT) {
+                auto source = std::dynamic_pointer_cast<JSObject>(args[i]);
+                for (const auto& pair : source->properties) {
+                    if (pair.second.enumerable) target->properties[pair.first] = pair.second;
+                }
+            }
+        }
+        return std::shared_ptr<JSValue>(target);
+    });
+
     environment->define("Object", objectConstructor);    
     // Add require
     environment->define("require", std::make_shared<JSNativeFunction>("require", [this](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
@@ -263,6 +312,7 @@ void Evaluator::setupGlobalEnvironment() {
             if (val === undefined) return "";
             return val + "";
         };
+        String.prototype = {};
         
         String.prototype.includes = function(search) { return this.indexOf(search) !== -1; };
 
@@ -416,6 +466,7 @@ void Evaluator::setupGlobalEnvironment() {
                 function(e) { onFinally(); throw e; }
             );
         };
+
     )";
     try {
         Lexer polyfillLexer(polyfillCode);
@@ -1745,6 +1796,39 @@ std::shared_ptr<JSValue> Evaluator::evalMemberExpression(MemberExpression* membe
                             }
                             this->environment = oldEnv;
                             return result;
+                            return result;
+                        });
+                    }
+                    if (propName == "all") {
+                        return std::make_shared<JSNativeFunction>("all", [this](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+                            std::string code = R"(
+                                new Promise(function(resolve, reject) {
+                                    let results = [];
+                                    let completed = 0;
+                                    if (!promises_val || promises_val.length === undefined || promises_val.length === 0) return resolve(results);
+                                    for (let i = 0; i < promises_val.length; i++) {
+                                        Promise.resolve(promises_val[i]).then(function(val) {
+                                            results[i] = val;
+                                            completed++;
+                                            if (completed === promises_val.length) resolve(results);
+                                        })["catch"](reject);
+                                    }
+                                })
+                            )";
+                            Lexer lexer(code);
+                            Parser parser(lexer.tokenize());
+                            auto ast = parser.parse();
+                            auto oldEnv = this->environment;
+                            this->environment = std::make_shared<Environment>(oldEnv);
+                            this->environment->define("promises_val", args.empty() ? std::shared_ptr<JSValue>(std::make_shared<JSArray>()) : args[0]);
+                            std::shared_ptr<JSValue> result = std::make_shared<JSUndefined>();
+                            if (!ast->body.empty()) {
+                                if (auto exprStmt = std::dynamic_pointer_cast<ExpressionStatement>(ast->body[0])) {
+                                    result = this->evaluate(exprStmt->expression);
+                                }
+                            }
+                            this->environment = oldEnv;
+                            return result;
                         });
                     }
                 }
@@ -1755,6 +1839,17 @@ std::shared_ptr<JSValue> Evaluator::evalMemberExpression(MemberExpression* membe
         if (obj->getType() == JSValueType::OBJECT || obj->getType() == JSValueType::ARRAY) {
             auto jsObj = std::dynamic_pointer_cast<JSObject>(obj);
             
+            if (obj->getType() == JSValueType::ARRAY) {
+                try {
+                    int idx = std::stoi(propName);
+                    auto targetArr = std::dynamic_pointer_cast<JSArray>(obj);
+                    if (idx >= 0 && idx < targetArr->elements.size()) {
+                        auto val = targetArr->elements[idx];
+                        if (val) return val;
+                    }
+                } catch (...) {}
+            }
+
             // Search in prototype chain
             auto currentObj = jsObj;
             while (currentObj) {

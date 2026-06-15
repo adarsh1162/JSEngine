@@ -166,5 +166,5 @@ JSEngine/
 ---
 
 <div align="center">
-  <i>Built with ❤️ for JavaScript and C++ by passionate engineers.</i>
+  <i>Made with ❤️ by Adarsh</i>
 </div>

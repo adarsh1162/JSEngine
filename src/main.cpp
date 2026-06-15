@@ -51,11 +51,13 @@ void run(const std::string& source) {
             std::cerr << "Compile Error: Bytecode generation failed.\n";
         }
     } else {
-        Evaluator evaluator;
         try {
+            Evaluator evaluator;
             evaluator.interpret(program);
         } catch (const std::exception& e) {
             std::cerr << "Runtime Error: " << e.what() << "\n";
+        } catch (...) {
+            std::cerr << "Unknown Runtime Error!\n";
         }
     }
 }

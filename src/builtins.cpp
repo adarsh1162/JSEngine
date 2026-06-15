@@ -81,6 +81,27 @@ std::shared_ptr<JSValue> getArrayMethod(std::shared_ptr<JSArray> array, const st
             return std::shared_ptr<JSValue>(std::make_shared<JSBoolean>(true));
         });
     }
+    if (methodName == "forEach") {
+        return std::make_shared<JSNativeFunction>("forEach", [array, invokeFunc](const std::vector<std::shared_ptr<JSValue>>& args) {
+            if (args.empty() || args[0]->getType() != JSValueType::FUNCTION || !invokeFunc) return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+            auto callback = std::dynamic_pointer_cast<JSFunction>(args[0]);
+            for (size_t i = 0; i < array->elements.size(); ++i) {
+                invokeFunc(callback, {array->elements[i], std::make_shared<JSNumber>(i), array});
+            }
+            return std::shared_ptr<JSValue>(std::make_shared<JSUndefined>());
+        });
+    }
+    if (methodName == "findIndex") {
+        return std::make_shared<JSNativeFunction>("findIndex", [array, invokeFunc](const std::vector<std::shared_ptr<JSValue>>& args) {
+            if (args.empty() || args[0]->getType() != JSValueType::FUNCTION || !invokeFunc) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(-1));
+            auto callback = std::dynamic_pointer_cast<JSFunction>(args[0]);
+            for (size_t i = 0; i < array->elements.size(); ++i) {
+                auto res = invokeFunc(callback, {array->elements[i], std::make_shared<JSNumber>(i), array});
+                if (res && res->isTruthy()) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(i));
+            }
+            return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(-1));
+        });
+    }
     if (methodName == "push") {
         return std::make_shared<JSNativeFunction>("push", [array](const std::vector<std::shared_ptr<JSValue>>& args) {
             for (const auto& arg : args) {
