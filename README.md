@@ -57,11 +57,12 @@ The V1 engine brings the essential mechanics of JavaScript to life. It has been 
   - `console.log`.
   - Extended `Math` object (`random`, `floor`, `pow`, `max`, `min`, `round`, `abs`, `ceil`, `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `PI`, `E`).
   - `Date.now()` implemented using low-level C++ chrono timestamps for millisecond accuracy.
-  - **File System (`fs`) API**: Full Node.js equivalent synchronous OS File System access (`readFileSync`, `writeFileSync`, `appendFileSync`, `existsSync`, `unlinkSync`, `mkdirSync`).
-  - **System Process (`process`) API**: Native global bindings for `process.cwd()`, `process.exit()`, and `process.getenv()`.
-  - **Child Process (`child_process`) API**: Execute system terminal commands directly from JavaScript via `child_process.execSync(cmd)`.
-- **Advanced Upgrades**:
+- **Node.js System Mastery (New!)**:
   - **Interactive REPL**: Running `JSEngine.exe` without file arguments launches a live Read-Eval-Print Loop terminal with real-time error handling.
+  - **File System (`fs`) API**: Full Node.js equivalent synchronous OS File System access (`readFileSync`, `writeFileSync`, `appendFileSync`, `existsSync`, `unlinkSync`, `mkdirSync`).
+  - **Child Process (`child_process`) API**: Execute system terminal commands directly from JavaScript via `child_process.execSync(cmd)`.
+  - **System Process (`process`) API**: Native global bindings for `process.cwd()`, `process.exit()`, and `process.getenv()`.
+- **Advanced Upgrades**:
   - **Destructuring Assignment**: Supports object and array destructuring (`let {a, b} = obj`, `let [x, y] = arr`), including advanced **Function Parameter Destructuring** (`function foo({a, b})`) via zero-risk AST injection logic.
   - **Garbage Collection**: Automated Mark-and-Sweep Memory Management.
   - **Event-Driven Architecture**: Native `EventEmitter` polyfills for `.on` and `.emit`.
