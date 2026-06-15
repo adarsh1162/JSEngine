@@ -250,6 +250,50 @@ void Evaluator::setupGlobalEnvironment() {
 
     environment->define("fs", fsObj);
 
+    // Add child_process
+    auto childProcessObj = std::make_shared<JSObject>();
+    childProcessObj->prototype = objectPrototype;
+    childProcessObj->properties["execSync"] = JSPropertyDescriptor{std::make_shared<JSNativeFunction>("execSync", [](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        if (args.empty()) throw RuntimeError("TypeError: execSync requires a command string");
+        std::string cmd = args[0]->toString();
+        std::array<char, 128> buffer;
+        std::string result;
+#ifdef _WIN32
+        std::unique_ptr<FILE, decltype(&_pclose)> pipe(_popen(cmd.c_str(), "r"), _pclose);
+#else
+        std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
+#endif
+        if (!pipe) throw RuntimeError("Error: popen() failed!");
+        while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+            result += buffer.data();
+        }
+        return std::make_shared<JSString>(result);
+    }), nullptr, nullptr, true, true, true};
+    environment->define("child_process", childProcessObj);
+
+    // Add process
+    auto processObj = std::make_shared<JSObject>();
+    processObj->prototype = objectPrototype;
+    processObj->properties["cwd"] = JSPropertyDescriptor{std::make_shared<JSNativeFunction>("cwd", [](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        return std::make_shared<JSString>(std::filesystem::current_path().string());
+    }), nullptr, nullptr, true, true, true};
+    
+    processObj->properties["exit"] = JSPropertyDescriptor{std::make_shared<JSNativeFunction>("exit", [](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        int code = 0;
+        if (!args.empty()) code = args[0]->toNumber();
+        exit(code);
+        return std::make_shared<JSUndefined>();
+    }), nullptr, nullptr, true, true, true};
+
+    processObj->properties["getenv"] = JSPropertyDescriptor{std::make_shared<JSNativeFunction>("getenv", [](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        if (args.empty()) return std::make_shared<JSUndefined>();
+        const char* val = std::getenv(args[0]->toString().c_str());
+        if (val) return std::make_shared<JSString>(val);
+        return std::make_shared<JSUndefined>();
+    }), nullptr, nullptr, true, true, true};
+
+    environment->define("process", processObj);
+
     auto jsonObj = std::make_shared<JSObject>();
     jsonObj->prototype = objectPrototype;
     jsonObj->properties["stringify"].value = std::make_shared<JSNativeFunction>("stringify", [this](const std::vector<std::shared_ptr<JSValue>>& args) {

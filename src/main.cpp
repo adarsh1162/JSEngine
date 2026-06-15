@@ -62,6 +62,38 @@ void run(const std::string& source) {
     }
 }
 
+void runRepl() {
+    std::cout << "Welcome to JSEngine V1 REPL!\nType '.exit' to quit.\n";
+    if (useVM) {
+        std::cout << "Note: REPL does not support V2 VM yet. Running in V1 AST Mode.\n";
+    }
+    
+    Evaluator evaluator;
+    std::string line;
+    while (true) {
+        std::cout << "> ";
+        if (!std::getline(std::cin, line)) break;
+        if (line == ".exit") break;
+        if (line.empty()) continue;
+
+        try {
+            Lexer lexer(line);
+            auto tokens = lexer.tokenize();
+            Parser parser(tokens);
+            auto program = parser.parse();
+            if (!program) {
+                std::cerr << "Syntax Error.\n";
+                continue;
+            }
+            evaluator.interpret(program);
+        } catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << "\n";
+        } catch (...) {
+            std::cerr << "Unknown Error\n";
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
     std::string sourceCode;
     std::string filePath;
@@ -84,14 +116,10 @@ int main(int argc, char* argv[]) {
         std::stringstream buffer;
         buffer << file.rdbuf();
         sourceCode = buffer.str();
+        run(sourceCode);
     } else {
-        std::cout << "Enter JavaScript code (Press Ctrl+D to finish on Linux/Mac, Ctrl+Z on Windows):" << std::endl;
-        std::stringstream buffer;
-        buffer << std::cin.rdbuf();
-        sourceCode = buffer.str();
+        runRepl();
     }
-
-    run(sourceCode);
 
     return 0;
 }
