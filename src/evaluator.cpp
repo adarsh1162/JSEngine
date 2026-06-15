@@ -517,6 +517,40 @@ void Evaluator::setupGlobalEnvironment() {
         if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(NAN));
         return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(std::round(args[0]->toNumber())));
     });
+    mathObj->properties["ceil"].value = std::make_shared<JSNativeFunction>("ceil", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(NAN));
+        return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(std::ceil(args[0]->toNumber())));
+    });
+    mathObj->properties["abs"].value = std::make_shared<JSNativeFunction>("abs", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(NAN));
+        return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(std::abs(args[0]->toNumber())));
+    });
+    mathObj->properties["sqrt"].value = std::make_shared<JSNativeFunction>("sqrt", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(NAN));
+        return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(std::sqrt(args[0]->toNumber())));
+    });
+    mathObj->properties["sin"].value = std::make_shared<JSNativeFunction>("sin", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(NAN));
+        return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(std::sin(args[0]->toNumber())));
+    });
+    mathObj->properties["cos"].value = std::make_shared<JSNativeFunction>("cos", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(NAN));
+        return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(std::cos(args[0]->toNumber())));
+    });
+    mathObj->properties["tan"].value = std::make_shared<JSNativeFunction>("tan", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(NAN));
+        return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(std::tan(args[0]->toNumber())));
+    });
+    mathObj->properties["log"].value = std::make_shared<JSNativeFunction>("log", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(NAN));
+        return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(std::log(args[0]->toNumber())));
+    });
+    mathObj->properties["exp"].value = std::make_shared<JSNativeFunction>("exp", [](const std::vector<std::shared_ptr<JSValue>>& args) {
+        if (args.empty()) return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(NAN));
+        return std::shared_ptr<JSValue>(std::make_shared<JSNumber>(std::exp(args[0]->toNumber())));
+    });
+    mathObj->properties["PI"].value = std::make_shared<JSNumber>(3.141592653589793);
+    mathObj->properties["E"].value = std::make_shared<JSNumber>(2.718281828459045);
     environment->define("Math", mathObj);
     environment->define("Array", std::make_shared<JSNativeFunction>("Array", [](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
         auto arr = std::make_shared<JSArray>();
@@ -537,6 +571,20 @@ void Evaluator::setupGlobalEnvironment() {
         return std::make_shared<JSNumber>(millis);
     });
     environment->define("Date", dateObj);
+
+    auto createErrorObj = [](const std::string& name, const std::vector<std::shared_ptr<JSValue>>& args) {
+        auto err = std::make_shared<JSObject>();
+        err->properties["name"].value = std::make_shared<JSString>(name);
+        err->properties["message"].value = args.empty() ? std::make_shared<JSString>("") : std::make_shared<JSString>(args[0]->toString());
+        return std::shared_ptr<JSValue>(err);
+    };
+
+    environment->define("Error", std::make_shared<JSNativeFunction>("Error", [createErrorObj](const std::vector<std::shared_ptr<JSValue>>& args) { return createErrorObj("Error", args); }));
+    environment->define("TypeError", std::make_shared<JSNativeFunction>("TypeError", [createErrorObj](const std::vector<std::shared_ptr<JSValue>>& args) { return createErrorObj("TypeError", args); }));
+    environment->define("SyntaxError", std::make_shared<JSNativeFunction>("SyntaxError", [createErrorObj](const std::vector<std::shared_ptr<JSValue>>& args) { return createErrorObj("SyntaxError", args); }));
+    environment->define("ReferenceError", std::make_shared<JSNativeFunction>("ReferenceError", [createErrorObj](const std::vector<std::shared_ptr<JSValue>>& args) { return createErrorObj("ReferenceError", args); }));
+    environment->define("RangeError", std::make_shared<JSNativeFunction>("RangeError", [createErrorObj](const std::vector<std::shared_ptr<JSValue>>& args) { return createErrorObj("RangeError", args); }));
+
 
 
     auto setTimeout = std::make_shared<JSNativeFunction>("setTimeout", [this](const std::vector<std::shared_ptr<JSValue>>& args) {
@@ -793,7 +841,25 @@ void Evaluator::execTryStatement(TryStatement* tryStmt) {
             if (tryStmt->handler) {
                 auto catchEnv = std::make_shared<Environment>(environment);
                 if (!tryStmt->param.empty()) {
-                    catchEnv->define(tryStmt->param, std::make_shared<JSString>(e.what()));
+                    std::string msg = e.what();
+                    std::string errName = "Error";
+                    if (msg.find("TypeError:") == 0) errName = "TypeError";
+                    else if (msg.find("ReferenceError:") == 0) errName = "ReferenceError";
+                    else if (msg.find("SyntaxError:") == 0) errName = "SyntaxError";
+                    else if (msg.find("RangeError:") == 0) errName = "RangeError";
+                    
+                    std::shared_ptr<JSValue> errObj;
+                    try {
+                        auto errConstructor = environment->get(errName);
+                        if (errConstructor && (errConstructor->getType() == JSValueType::NATIVE_FUNCTION || errConstructor->getType() == JSValueType::FUNCTION)) {
+                            errObj = executeFunction(errConstructor, nullptr, { std::make_shared<JSString>(msg) });
+                        } else {
+                            errObj = std::make_shared<JSString>(msg);
+                        }
+                    } catch (...) {
+                        errObj = std::make_shared<JSString>(msg);
+                    }
+                    catchEnv->define(tryStmt->param, errObj);
                 }
                 executeBlock(tryStmt->handler->statements, catchEnv);
             }
