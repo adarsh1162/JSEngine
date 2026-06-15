@@ -123,8 +123,12 @@ std::shared_ptr<Statement> Parser::functionDeclaration() {
     Token name = consume(TokenType::IDENTIFIER, "Expect function name");
     consume(TokenType::LPAREN, "Expect '(' after function name");
     
+
     std::vector<std::pair<std::string, std::shared_ptr<Expression>>> parameters;
+    std::vector<std::shared_ptr<Statement>> injectedDestructurings;
+    static int destructCounter = 0;
     bool hasRest = false;
+    
     if (!check(TokenType::RPAREN)) {
         do {
             if (match({TokenType::SPREAD})) {
@@ -132,18 +136,50 @@ std::shared_ptr<Statement> Parser::functionDeclaration() {
                 hasRest = true;
                 break;
             }
-            std::string paramName = consume(TokenType::IDENTIFIER, "Expect parameter name").value;
-            std::shared_ptr<Expression> defaultVal = nullptr;
-            if (match({TokenType::ASSIGN})) {
-                defaultVal = expression();
+            
+            bool isObjDestruct = match({TokenType::LBRACE});
+            bool isArrDestruct = !isObjDestruct && match({TokenType::LBRACKET});
+            
+            if (isObjDestruct || isArrDestruct) {
+                std::vector<std::string> names;
+                TokenType endToken = isObjDestruct ? TokenType::RBRACE : TokenType::RBRACKET;
+                if (!check(endToken)) {
+                    do {
+                        names.push_back(consume(TokenType::IDENTIFIER, "Expect variable name in destructuring").value);
+                    } while (match({TokenType::COMMA}));
+                }
+                consume(endToken, "Expect closing bracket after destructuring");
+                
+                std::string paramName = "__destruct_" + std::to_string(destructCounter++);
+                
+                std::shared_ptr<Expression> defaultVal = nullptr;
+                if (match({TokenType::ASSIGN})) {
+                    defaultVal = expression();
+                }
+                
+                parameters.push_back({paramName, defaultVal});
+                
+                auto destructStmt = std::make_shared<DestructuringDeclaration>(
+                    false, false, names, std::make_shared<Identifier>(paramName), isArrDestruct);
+                injectedDestructurings.push_back(destructStmt);
+            } else {
+                std::string paramName = consume(TokenType::IDENTIFIER, "Expect parameter name").value;
+                std::shared_ptr<Expression> defaultVal = nullptr;
+                if (match({TokenType::ASSIGN})) {
+                    defaultVal = expression();
+                }
+                parameters.push_back({paramName, defaultVal});
             }
-            parameters.push_back({paramName, defaultVal});
         } while (match({TokenType::COMMA}));
     }
+
     consume(TokenType::RPAREN, "Expect ')' after parameters");
     
     consume(TokenType::LBRACE, "Expect '{' before function body");
     auto body = block();
+    if (!injectedDestructurings.empty()) {
+        body->statements.insert(body->statements.begin(), injectedDestructurings.begin(), injectedDestructurings.end());
+    }
     return std::make_shared<FunctionDeclaration>(name.value, parameters, body, hasRest);
 }
 
@@ -167,27 +203,62 @@ std::shared_ptr<MethodDefinition> Parser::methodDefinition() {
     bool isAsync = match({TokenType::ASYNC});
     std::string methodName = consume(TokenType::IDENTIFIER, "Expect method name.").value;
     consume(TokenType::LPAREN, "Expect '(' after method name.");
+
     std::vector<std::pair<std::string, std::shared_ptr<Expression>>> parameters;
+    std::vector<std::shared_ptr<Statement>> injectedDestructurings;
+    static int destructCounter = 0;
     bool hasRest = false;
+    
     if (!check(TokenType::RPAREN)) {
         do {
             if (match({TokenType::SPREAD})) {
-                std::string paramName = consume(TokenType::IDENTIFIER, "Expect parameter name after '...'.").value;
-                parameters.push_back({paramName, nullptr});
+                parameters.push_back({consume(TokenType::IDENTIFIER, "Expect rest parameter name").value, nullptr});
                 hasRest = true;
-                break; // Rest must be last
+                break;
             }
-            std::string paramName = consume(TokenType::IDENTIFIER, "Expect parameter name.").value;
-            std::shared_ptr<Expression> defaultVal = nullptr;
-            if (match({TokenType::ASSIGN})) {
-                defaultVal = expression();
+            
+            bool isObjDestruct = match({TokenType::LBRACE});
+            bool isArrDestruct = !isObjDestruct && match({TokenType::LBRACKET});
+            
+            if (isObjDestruct || isArrDestruct) {
+                std::vector<std::string> names;
+                TokenType endToken = isObjDestruct ? TokenType::RBRACE : TokenType::RBRACKET;
+                if (!check(endToken)) {
+                    do {
+                        names.push_back(consume(TokenType::IDENTIFIER, "Expect variable name in destructuring").value);
+                    } while (match({TokenType::COMMA}));
+                }
+                consume(endToken, "Expect closing bracket after destructuring");
+                
+                std::string paramName = "__destruct_" + std::to_string(destructCounter++);
+                
+                std::shared_ptr<Expression> defaultVal = nullptr;
+                if (match({TokenType::ASSIGN})) {
+                    defaultVal = expression();
+                }
+                
+                parameters.push_back({paramName, defaultVal});
+                
+                auto destructStmt = std::make_shared<DestructuringDeclaration>(
+                    false, false, names, std::make_shared<Identifier>(paramName), isArrDestruct);
+                injectedDestructurings.push_back(destructStmt);
+            } else {
+                std::string paramName = consume(TokenType::IDENTIFIER, "Expect parameter name").value;
+                std::shared_ptr<Expression> defaultVal = nullptr;
+                if (match({TokenType::ASSIGN})) {
+                    defaultVal = expression();
+                }
+                parameters.push_back({paramName, defaultVal});
             }
-            parameters.push_back({paramName, defaultVal});
         } while (match({TokenType::COMMA}));
     }
+
     consume(TokenType::RPAREN, "Expect ')' after parameters.");
     consume(TokenType::LBRACE, "Expect '{' before method body.");
     auto body = block();
+    if (!injectedDestructurings.empty()) {
+        body->statements.insert(body->statements.begin(), injectedDestructurings.begin(), injectedDestructurings.end());
+    }
     return std::make_shared<MethodDefinition>(methodName, parameters, hasRest, std::dynamic_pointer_cast<BlockStatement>(body), isAsync);
 }
 
@@ -580,8 +651,12 @@ std::shared_ptr<Expression> Parser::functionExpression() {
     }
     consume(TokenType::LPAREN, "Expect '(' after function");
     
+
     std::vector<std::pair<std::string, std::shared_ptr<Expression>>> parameters;
+    std::vector<std::shared_ptr<Statement>> injectedDestructurings;
+    static int destructCounter = 0;
     bool hasRest = false;
+    
     if (!check(TokenType::RPAREN)) {
         do {
             if (match({TokenType::SPREAD})) {
@@ -589,23 +664,57 @@ std::shared_ptr<Expression> Parser::functionExpression() {
                 hasRest = true;
                 break;
             }
-            std::string paramName = consume(TokenType::IDENTIFIER, "Expect parameter name").value;
-            std::shared_ptr<Expression> defaultVal = nullptr;
-            if (match({TokenType::ASSIGN})) {
-                defaultVal = expression();
+            
+            bool isObjDestruct = match({TokenType::LBRACE});
+            bool isArrDestruct = !isObjDestruct && match({TokenType::LBRACKET});
+            
+            if (isObjDestruct || isArrDestruct) {
+                std::vector<std::string> names;
+                TokenType endToken = isObjDestruct ? TokenType::RBRACE : TokenType::RBRACKET;
+                if (!check(endToken)) {
+                    do {
+                        names.push_back(consume(TokenType::IDENTIFIER, "Expect variable name in destructuring").value);
+                    } while (match({TokenType::COMMA}));
+                }
+                consume(endToken, "Expect closing bracket after destructuring");
+                
+                std::string paramName = "__destruct_" + std::to_string(destructCounter++);
+                
+                std::shared_ptr<Expression> defaultVal = nullptr;
+                if (match({TokenType::ASSIGN})) {
+                    defaultVal = expression();
+                }
+                
+                parameters.push_back({paramName, defaultVal});
+                
+                auto destructStmt = std::make_shared<DestructuringDeclaration>(
+                    false, false, names, std::make_shared<Identifier>(paramName), isArrDestruct);
+                injectedDestructurings.push_back(destructStmt);
+            } else {
+                std::string paramName = consume(TokenType::IDENTIFIER, "Expect parameter name").value;
+                std::shared_ptr<Expression> defaultVal = nullptr;
+                if (match({TokenType::ASSIGN})) {
+                    defaultVal = expression();
+                }
+                parameters.push_back({paramName, defaultVal});
             }
-            parameters.push_back({paramName, defaultVal});
         } while (match({TokenType::COMMA}));
     }
+
     consume(TokenType::RPAREN, "Expect ')' after parameters");
     
     consume(TokenType::LBRACE, "Expect '{' before function body");
     auto body = block();
+    if (!injectedDestructurings.empty()) {
+        body->statements.insert(body->statements.begin(), injectedDestructurings.begin(), injectedDestructurings.end());
+    }
     return std::make_shared<FunctionExpression>(name, parameters, body, hasRest);
 }
 
 std::shared_ptr<Expression> Parser::arrowFunction(bool hasParens) {
     std::vector<std::pair<std::string, std::shared_ptr<Expression>>> parameters;
+    std::vector<std::shared_ptr<Statement>> injectedDestructurings;
+    static int destructCounter = 0;
     bool hasRest = false;
     
     if (hasParens) {
@@ -616,12 +725,40 @@ std::shared_ptr<Expression> Parser::arrowFunction(bool hasParens) {
                     hasRest = true;
                     break;
                 }
-                std::string paramName = consume(TokenType::IDENTIFIER, "Expect parameter name").value;
-                std::shared_ptr<Expression> defaultVal = nullptr;
-                if (match({TokenType::ASSIGN})) {
-                    defaultVal = expression();
+                
+                bool isObjDestruct = match({TokenType::LBRACE});
+                bool isArrDestruct = !isObjDestruct && match({TokenType::LBRACKET});
+                
+                if (isObjDestruct || isArrDestruct) {
+                    std::vector<std::string> names;
+                    TokenType endToken = isObjDestruct ? TokenType::RBRACE : TokenType::RBRACKET;
+                    if (!check(endToken)) {
+                        do {
+                            names.push_back(consume(TokenType::IDENTIFIER, "Expect variable name in destructuring").value);
+                        } while (match({TokenType::COMMA}));
+                    }
+                    consume(endToken, "Expect closing bracket after destructuring");
+                    
+                    std::string paramName = "__destruct_" + std::to_string(destructCounter++);
+                    
+                    std::shared_ptr<Expression> defaultVal = nullptr;
+                    if (match({TokenType::ASSIGN})) {
+                        defaultVal = expression();
+                    }
+                    
+                    parameters.push_back({paramName, defaultVal});
+                    
+                    auto destructStmt = std::make_shared<DestructuringDeclaration>(
+                        false, false, names, std::make_shared<Identifier>(paramName), isArrDestruct);
+                    injectedDestructurings.push_back(destructStmt);
+                } else {
+                    std::string paramName = consume(TokenType::IDENTIFIER, "Expect parameter name").value;
+                    std::shared_ptr<Expression> defaultVal = nullptr;
+                    if (match({TokenType::ASSIGN})) {
+                        defaultVal = expression();
+                    }
+                    parameters.push_back({paramName, defaultVal});
                 }
-                parameters.push_back({paramName, defaultVal});
             } while (match({TokenType::COMMA}));
         }
         consume(TokenType::RPAREN, "Expect ')' after arrow function parameters");
@@ -641,6 +778,10 @@ std::shared_ptr<Expression> Parser::arrowFunction(bool hasParens) {
         auto ret = std::make_shared<ReturnStatement>(expr);
         std::vector<std::shared_ptr<Statement>> stmts = {ret};
         body = std::make_shared<BlockStatement>(stmts);
+    }
+    
+    if (!injectedDestructurings.empty()) {
+        body->statements.insert(body->statements.begin(), injectedDestructurings.begin(), injectedDestructurings.end());
     }
     
     return std::make_shared<ArrowFunctionExpression>(parameters, body, hasRest);

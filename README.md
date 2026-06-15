@@ -31,8 +31,9 @@ The V1 engine brings the essential mechanics of JavaScript to life. It has been 
 
 - **Core Data Types & Structures**: 
   - Full native support for `Number`, `String`, `Boolean`, `Null`, and `Undefined`.
-  - **Arrays**: Dynamic array allocation, bracket notation access (`arr[0]`), push/pop operations, and dynamic `length` tracking.
-  - **Objects**: Key-value pair hashing, nested objects, dot notation (`obj.key`), and bracket notation (`obj["key"]`) resolution.
+  - **Arrays**: Dynamic array allocation, bracket notation access (`arr[0]`), push/pop operations, dynamic `length` tracking, and high-order methods (`forEach`, `findIndex`).
+  - **Objects**: Key-value pair hashing, nested objects, dot notation (`obj.key`), bracket notation (`obj["key"]`) resolution, and static methods (`Object.keys`, `Object.values`, `Object.entries`, `Object.assign`).
+  - **Collections**: Native polyfill support for `Map` and `Set`.
 - **Functions & Execution Contexts**: 
   - First-class citizens: Function declarations, anonymous functions, and function expressions.
   - **Deep Closures**: Functions accurately capture and retain their lexical environment scopes.
@@ -44,17 +45,20 @@ The V1 engine brings the essential mechanics of JavaScript to life. It has been 
   - Complete ES6 `class` syntax support.
   - Constructors, methods, prototype chain delegation, inheritance (`extends`), and `super` property calls.
 - **Error Handling**: 
-  - Comprehensive `try...catch...finally` blocks.
-  - Native custom error throwing (`throw new Error()`).
+  - Comprehensive `try...catch...finally` blocks with fully compatible Native JS Catch block wrapping (`e.name`, `e.message`).
+  - Native custom error throwing with built-in Error prototypes (`Error`, `TypeError`, `SyntaxError`, `ReferenceError`, `RangeError`).
 - **Expressions & Operators**: 
   - Arithmetic (`+`, `-`, `*`, `/`, `%`), Relational (`<`, `>`, `<=`, `>=`), and Strict/Loose Equality (`==`, `!=`, `===`, `!==`).
   - Logical chaining (`&&`, `||`, `!`), assignments (`+=`, `-=`), and Bitwise operations.
 - **Asynchronous Event Loop Foundation**: 
   - Implementation of `setTimeout`, `setInterval`, `clearTimeout`, and `clearInterval` (Macrotasks).
-  - Promise microtask execution via `queueMicrotask`.
+  - Native `Promise` execution and microtask queueing via `queueMicrotask`. Also fully supports `Promise.all` asynchronously!
 - **Built-In APIs**:
-  - `console.log`, `Math` object methods (`random`, `floor`, `abs`, etc).
+  - `console.log`.
+  - Extended `Math` object (`random`, `floor`, `pow`, `max`, `min`, `round`, `abs`, `ceil`, `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `PI`, `E`).
+  - `Date.now()` implemented using low-level C++ chrono timestamps for millisecond accuracy.
 - **Advanced Upgrades**:
+  - **Destructuring Assignment**: Supports object and array destructuring (`let {a, b} = obj`, `let [x, y] = arr`), including advanced **Function Parameter Destructuring** (`function foo({a, b})`) via zero-risk AST injection logic.
   - **Garbage Collection**: Automated Mark-and-Sweep Memory Management.
   - **Event-Driven Architecture**: Native `EventEmitter` polyfills for `.on` and `.emit`.
   - **JSON**: Safe `JSON.stringify` with Circular Reference tracking/protection.
