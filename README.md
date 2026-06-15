@@ -96,6 +96,22 @@ server.on("connection", (socket) => {
 });
 ```
 
+### 5. Standalone Binary Packager (`--compile`)
+Inspired by Deno and Bun, JSEngine now features a built-in packager that bundles your JavaScript applications into standalone, highly portable `.exe` binaries using a blazing-fast payload append method!
+```bash
+# Compile your JS file into a standalone Windows Executable!
+JSEngine.exe --compile my_app.js -o built_app.exe
+./built_app.exe
+```
+
+### 6. NPM / CommonJS Module Resolution
+JSEngine completely overhauls the basic `require()` function to mimic NodeJS's legendary module resolution algorithm. It natively parses `package.json`, traverses `node_modules`, handles cyclic dependencies with a `requireCache`, and automatically injects proper `__dirname` and `__filename` into module scopes!
+```javascript
+// Natively consume external packages from node_modules!
+const express = require("express"); 
+const myLocalLib = require("./src/my_lib.js");
+```
+
 ---
 
 ### V2 (Bytecode Compiler & VM)
