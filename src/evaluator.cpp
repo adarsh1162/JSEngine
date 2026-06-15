@@ -1,5 +1,6 @@
 #include "evaluator.h"
 #include <fstream>
+#include <filesystem>
 #include "builtins.h"
 #include <cmath>
 #include <chrono>
@@ -195,16 +196,58 @@ void Evaluator::setupGlobalEnvironment() {
 
     // Add fs
     auto fsObj = std::make_shared<JSObject>();
-    fsObj->properties["readFileSync"] = JSPropertyDescriptor{std::make_shared<JSNativeFunction>("readFileSync", [](const std::vector<std::shared_ptr<JSValue>>& args) {
-        if (args.empty()) throw RuntimeError("TypeError: readFileSync expects at least 1 argument");
-        std::string filename = args[0]->toString();
-        std::ifstream file(filename);
-        if (!file.is_open()) {
-            throw RuntimeError("Error: ENOENT: no such file or directory, open '" + filename + "'");
-        }
-        std::string fileContent((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        return std::shared_ptr<JSValue>(std::make_shared<JSString>(fileContent));
+    fsObj->prototype = objectPrototype;
+    
+    fsObj->properties["readFileSync"] = JSPropertyDescriptor{std::make_shared<JSNativeFunction>("readFileSync", [](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        if (args.empty()) throw RuntimeError("TypeError: readFileSync requires 1 argument");
+        std::string path = args[0]->toString();
+        std::ifstream file(path);
+        if (!file.is_open()) throw RuntimeError("Error: ENOENT: no such file or directory, open '" + path + "'");
+        std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        return std::make_shared<JSString>(content);
     }), nullptr, nullptr, true, true, true};
+
+    fsObj->properties["writeFileSync"] = JSPropertyDescriptor{std::make_shared<JSNativeFunction>("writeFileSync", [](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        if (args.size() < 2) throw RuntimeError("TypeError: writeFileSync requires 2 arguments");
+        std::string path = args[0]->toString();
+        std::string data = args[1]->toString();
+        std::ofstream file(path);
+        if (!file.is_open()) throw RuntimeError("Error: EACCES: permission denied, open '" + path + "'");
+        file << data;
+        return std::make_shared<JSUndefined>();
+    }), nullptr, nullptr, true, true, true};
+
+    fsObj->properties["appendFileSync"] = JSPropertyDescriptor{std::make_shared<JSNativeFunction>("appendFileSync", [](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        if (args.size() < 2) throw RuntimeError("TypeError: appendFileSync requires 2 arguments");
+        std::string path = args[0]->toString();
+        std::string data = args[1]->toString();
+        std::ofstream file(path, std::ios_base::app);
+        if (!file.is_open()) throw RuntimeError("Error: EACCES: permission denied, open '" + path + "'");
+        file << data;
+        return std::make_shared<JSUndefined>();
+    }), nullptr, nullptr, true, true, true};
+
+    fsObj->properties["existsSync"] = JSPropertyDescriptor{std::make_shared<JSNativeFunction>("existsSync", [](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        if (args.empty()) return std::make_shared<JSBoolean>(false);
+        std::string path = args[0]->toString();
+        return std::make_shared<JSBoolean>(std::filesystem::exists(path));
+    }), nullptr, nullptr, true, true, true};
+
+    fsObj->properties["unlinkSync"] = JSPropertyDescriptor{std::make_shared<JSNativeFunction>("unlinkSync", [](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        if (args.empty()) throw RuntimeError("TypeError: unlinkSync requires 1 argument");
+        std::string path = args[0]->toString();
+        if (!std::filesystem::exists(path)) throw RuntimeError("Error: ENOENT: no such file or directory, unlink '" + path + "'");
+        std::filesystem::remove(path);
+        return std::make_shared<JSUndefined>();
+    }), nullptr, nullptr, true, true, true};
+
+    fsObj->properties["mkdirSync"] = JSPropertyDescriptor{std::make_shared<JSNativeFunction>("mkdirSync", [](const std::vector<std::shared_ptr<JSValue>>& args) -> std::shared_ptr<JSValue> {
+        if (args.empty()) throw RuntimeError("TypeError: mkdirSync requires 1 argument");
+        std::string path = args[0]->toString();
+        std::filesystem::create_directories(path);
+        return std::make_shared<JSUndefined>();
+    }), nullptr, nullptr, true, true, true};
+
     environment->define("fs", fsObj);
 
     auto jsonObj = std::make_shared<JSObject>();
@@ -490,7 +533,6 @@ void Evaluator::setupGlobalEnvironment() {
     consoleObj->prototype = objectPrototype;
     consoleObj->properties["log"].value = std::make_shared<JSNativeFunction>("log", builtin_console_log);
     environment->define("console", consoleObj);
-
     auto mathObj = std::make_shared<JSObject>();
     mathObj->prototype = objectPrototype;
     mathObj->properties["floor"].value = std::make_shared<JSNativeFunction>("floor", builtin_math_floor);

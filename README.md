@@ -57,6 +57,7 @@ The V1 engine brings the essential mechanics of JavaScript to life. It has been 
   - `console.log`.
   - Extended `Math` object (`random`, `floor`, `pow`, `max`, `min`, `round`, `abs`, `ceil`, `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `PI`, `E`).
   - `Date.now()` implemented using low-level C++ chrono timestamps for millisecond accuracy.
+  - **File System (`fs`) API**: Full Node.js equivalent synchronous OS File System access (`readFileSync`, `writeFileSync`, `appendFileSync`, `existsSync`, `unlinkSync`, `mkdirSync`).
 - **Advanced Upgrades**:
   - **Destructuring Assignment**: Supports object and array destructuring (`let {a, b} = obj`, `let [x, y] = arr`), including advanced **Function Parameter Destructuring** (`function foo({a, b})`) via zero-risk AST injection logic.
   - **Garbage Collection**: Automated Mark-and-Sweep Memory Management.
